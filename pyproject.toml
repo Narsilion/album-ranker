@@ -12,6 +12,7 @@ dependencies = [
   "fastapi>=0.115.0",
   "uvicorn>=0.30.0",
   "pydantic>=2.8.0",
+  "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +23,7 @@ dev = [
 
 [project.scripts]
 album-ranker = "album_ranker.main:main"
+album-ranker-backup = "album_ranker.backup:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
