@@ -41,6 +41,7 @@ class AlbumUpsert(BaseModel):
     artist_description_source_url: str | None = None
     artist_description_source_label: str | None = None
     album_external_url: str | None = None
+    album_stream_url: str | None = None
     title: str
     release_year: int | None = Field(default=None, ge=1000, le=9999)
     genre: str | None = None
@@ -68,6 +69,7 @@ class AlbumCardRecord(BaseModel):
     cover_image_path: str | None = None
     cover_source_url: str | None = None
     album_external_url: str | None = None
+    album_stream_url: str | None = None
     notes: str | None = None
     created_at: str
     updated_at: str
@@ -178,6 +180,7 @@ class AlbumDraftData(BaseModel):
     artist_description_source_url: str | None = None
     artist_description_source_label: str | None = None
     album_external_url: str | None = None
+    album_stream_url: str | None = None
     album_title: str
     release_year: int | None = None
     genre: str | None = None
@@ -275,6 +278,7 @@ class AlbumFormPayload(BaseModel):
     artist_description_source_url: str | None = None
     artist_description_source_label: str | None = None
     album_external_url: str | None = None
+    album_stream_url: str | None = None
     title: str
     release_year: int | None = Field(default=None, ge=1000, le=9999)
     genre: str | None = None
@@ -318,6 +322,7 @@ class AlbumFormPayload(BaseModel):
             artist_description_source_url=self.artist_description_source_url,
             artist_description_source_label=self.artist_description_source_label,
             album_external_url=self.album_external_url,
+            album_stream_url=self.album_stream_url,
             title=self.title,
             release_year=self.release_year,
             genre=self.genre,

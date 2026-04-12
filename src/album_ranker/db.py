@@ -71,6 +71,7 @@ class Database:
                     cover_image_path TEXT,
                     cover_source_url TEXT,
                     album_external_url TEXT,
+                    album_stream_url TEXT,
                     notes TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -140,6 +141,8 @@ class Database:
             album_columns = {row["name"] for row in connection.execute("PRAGMA table_info(albums)").fetchall()}
             if "album_external_url" not in album_columns:
                 connection.execute("ALTER TABLE albums ADD COLUMN album_external_url TEXT")
+            if "album_stream_url" not in album_columns:
+                connection.execute("ALTER TABLE albums ADD COLUMN album_stream_url TEXT")
             if "rating" not in album_columns:
                 connection.execute("ALTER TABLE albums ADD COLUMN rating INTEGER")
 
@@ -426,8 +429,8 @@ class Database:
                 """
                 INSERT INTO albums(
                     artist_id, title, release_year, genre, rating, duration_seconds, cover_image_path,
-                    cover_source_url, album_external_url, notes, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cover_source_url, album_external_url, album_stream_url, notes, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     artist_id,
@@ -439,6 +442,7 @@ class Database:
                     payload.cover_image_path,
                     payload.cover_source_url,
                     payload.album_external_url,
+                    payload.album_stream_url,
                     payload.notes,
                     now,
                     now,
@@ -456,7 +460,7 @@ class Database:
                 """
                 UPDATE albums
                 SET artist_id = ?, title = ?, release_year = ?, genre = ?, rating = ?, duration_seconds = ?,
-                    cover_image_path = ?, cover_source_url = ?, album_external_url = ?, notes = ?, updated_at = ?
+                    cover_image_path = ?, cover_source_url = ?, album_external_url = ?, album_stream_url = ?, notes = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -469,6 +473,7 @@ class Database:
                     payload.cover_image_path,
                     payload.cover_source_url,
                     payload.album_external_url,
+                    payload.album_stream_url,
                     payload.notes,
                     utc_now_iso(),
                     album_id,

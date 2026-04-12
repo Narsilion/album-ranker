@@ -492,6 +492,11 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
       .list-head {{
         padding: 18px;
         background: rgba(255, 255, 255, 0.04);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        cursor: pointer;
+        user-select: none;
       }}
       .rank-list {{
         display: grid;
@@ -717,14 +722,19 @@ def _list_markup(record: AlbumListRecord) -> str:
     ) or '<div class="rank-item"><div></div><div></div><div class="muted">No albums in this list yet.</div><div></div></div>'
     return f"""
       <section class="list-block" data-list-id="{record.id}">
-        <div class="list-head">
-          <h3><a href="/lists/{record.id}" style="text-decoration:none;">{_escape(record.name)}</a></h3>
-          <div class="muted">{_escape(record.description)} {_escape(record.genre_filter_hint)} {_escape(str(record.year or ''))}</div>
+        <div class="list-head" data-toggle="list-body-{record.id}">
+          <div>
+            <h3 style="margin:0;"><a href="/lists/{record.id}" style="text-decoration:none;" onclick="event.stopPropagation();">{_escape(record.name)}</a></h3>
+            <div class="muted" style="font-size:12px; margin-top:2px;">{_escape(record.description)} {_escape(record.genre_filter_hint)} {_escape(str(record.year or ''))}</div>
+          </div>
+          <button type="button" class="secondary list-toggle-btn" style="flex:0 0 auto;">&#9660;</button>
         </div>
-        <div class="rank-list">{items}</div>
-        <div style="padding:14px 18px; border-top:1px solid var(--line);">
-          <button type="button" class="save-order">Save</button>
-          <button type="button" class="danger delete-list" style="margin-left:8px;">Delete List</button>
+        <div id="list-body-{record.id}" class="hidden">
+          <div class="rank-list">{items}</div>
+          <div style="padding:14px 18px; border-top:1px solid var(--line);">
+            <button type="button" class="save-order">Save</button>
+            <button type="button" class="danger delete-list" style="margin-left:8px;">Delete List</button>
+          </div>
         </div>
       </section>
     """
@@ -1304,6 +1314,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             <div class="star-widget-label" id="starWidgetLabel">{_escape(star_initial_label)}</div>
             <div class="star-widget-status" id="starWidgetStatus"></div>
           </div>
+          {('<div class="row" style="margin-top:10px;gap:8px;justify-content:center;">' + (f'<a class="tag" href="{_escape(album.album_external_url)}" target="_blank" rel="noopener noreferrer">Source</a>' if album.album_external_url else '') + (f'<a class="tag" href="{_escape(album.album_stream_url)}" target="_blank" rel="noopener noreferrer">&#9654; Play</a>' if album.album_stream_url else '') + '</div>') if album.album_external_url or album.album_stream_url else ''}
           <div class="meta-stack">
             <div class="detail-head">
               <div class="meta-item" style="flex:1;">
@@ -1358,6 +1369,10 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
                   <label class="form-label" for="albumEditDuration">Length</label>
                   <input id="albumEditDuration" name="duration" value="{_escape(seconds_to_display(album.duration_seconds))}" placeholder="Length">
                 </div>
+              </div>
+              <div class="form-field">
+                <label class="form-label" for="albumEditStreamUrl">Stream URL</label>
+                <input id="albumEditStreamUrl" name="album_stream_url" value="{_escape(album.album_stream_url)}" placeholder="https://...">
               </div>
               <div class="form-field">
                 <label class="form-label" for="albumEditDescription">Artist Description</label>
@@ -1463,6 +1478,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
                 artist_description_source_url: form.artist_description_source_url.value.trim() || null,
                 artist_description_source_label: form.artist_description_source_label.value.trim() || null,
                 album_external_url: form.album_external_url.value.trim() || null,
+                album_stream_url: form.album_stream_url.value.trim() || null,
                 title: form.title.value.trim(),
                 release_year: form.release_year.value.trim() ? Number(form.release_year.value.trim()) : null,
                 genre: form.genre.value.trim() || null,
@@ -1690,6 +1706,15 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
             }}),
           }});
           window.location.reload();
+        }});
+        document.querySelectorAll(".list-head[data-toggle]").forEach((head) => {{
+          head.addEventListener("click", () => {{
+            const body = document.getElementById(head.dataset.toggle);
+            if (!body) return;
+            body.classList.toggle("hidden");
+            const btn = head.querySelector(".list-toggle-btn");
+            if (btn) btn.innerHTML = body.classList.contains("hidden") ? "&#9660;" : "&#9650;";
+          }});
         }});
         document.querySelectorAll(".list-block").forEach((block) => {{
           const listId = block.dataset.listId;
