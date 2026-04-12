@@ -296,12 +296,31 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         overflow: hidden;
         background: #101a24;
         box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
+        position: relative;
+        cursor: pointer;
       }}
       .cover img {{
         width: 100%;
         height: 100%;
         object-fit: cover;
         display: block;
+      }}
+      .cover-upload-overlay {{
+        position: absolute;
+        inset: 0;
+        background: rgba(0,0,0,0.55);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        transition: opacity 0.15s;
+        border-radius: 22px;
+        font-size: 13px;
+        color: #fff;
+        pointer-events: none;
+      }}
+      .cover:hover .cover-upload-overlay {{
+        opacity: 1;
       }}
       .album-title {{
         margin-top: 12px;
@@ -1308,7 +1327,11 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
       </section>
       <section class="detail-layout">
         <div>
-          <div class="cover"><img src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover"></div>
+          <label class="cover" for="coverFileInput" title="Click to upload a cover image">
+            <img id="coverImg" src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover">
+            <div class="cover-upload-overlay">&#128247; Upload cover</div>
+          </label>
+          <input type="file" id="coverFileInput" accept="image/jpeg,image/png,image/webp" style="display:none;">
           <div class="star-widget">
             <div class="star-widget-row" id="starRatingRow" data-album-id="{album.id}" data-current="{album.rating or 0}">{star_buttons}</div>
             <div class="star-widget-label" id="starWidgetLabel">{_escape(star_initial_label)}</div>
@@ -1434,6 +1457,25 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
                 status.textContent = err.message;
               }}
             }});
+          }});
+        }})();
+        (function() {{
+          const coverFileInput = document.getElementById("coverFileInput");
+          const coverImg = document.getElementById("coverImg");
+          coverFileInput.addEventListener("change", async () => {{
+            const file = coverFileInput.files[0];
+            if (!file) return;
+            const fd = new FormData();
+            fd.append("file", file);
+            try {{
+              const resp = await fetch("/api/albums/{album.id}/cover", {{ method: "POST", body: fd }});
+              if (!resp.ok) {{ const t = await resp.text(); console.error("Cover upload failed:", t); return; }}
+              const data = await resp.json();
+              if (data.cover_image_path) {{
+                const name = data.cover_image_path.split("/").pop();
+                coverImg.src = "/library-data/covers/" + name + "?t=" + Date.now();
+              }}
+            }} catch (e) {{ console.error("Cover upload error:", e); }}
           }});
         }})();
         const albumEditToggle = document.getElementById("albumEditToggle");

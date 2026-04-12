@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -240,6 +240,20 @@ def create_app(
             return db.patch_album_rating(album_id, payload.rating)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/albums/{album_id}/cover", response_model=AlbumDetailRecord)
+    async def upload_album_cover(album_id: int, file: UploadFile) -> AlbumDetailRecord:
+        try:
+            db.get_album(album_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        suffix = Path(file.filename or "").suffix.lower() or ".jpg"
+        if suffix not in (".jpg", ".jpeg", ".png", ".webp"):
+            raise HTTPException(status_code=400, detail="Unsupported image type")
+        settings.cover_dir.mkdir(parents=True, exist_ok=True)
+        target = settings.cover_dir / f"album-{album_id}-cover{suffix}"
+        target.write_bytes(await file.read())
+        return db.patch_album_cover(album_id, str(target))
 
     @app.delete("/api/albums/{album_id}")
     async def delete_album(album_id: int) -> dict[str, bool]:

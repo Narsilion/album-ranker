@@ -491,6 +491,15 @@ class Database:
             )
         return self.get_album(album_id)
 
+    def patch_album_cover(self, album_id: int, cover_image_path: str) -> AlbumDetailRecord:
+        self.get_album(album_id)
+        with self.connection() as connection:
+            connection.execute(
+                "UPDATE albums SET cover_image_path = ?, updated_at = ? WHERE id = ?",
+                (cover_image_path, utc_now_iso(), album_id),
+            )
+        return self.get_album(album_id)
+
     def delete_album(self, album_id: int) -> None:
         self.get_album(album_id)
         with self.connection() as connection:
