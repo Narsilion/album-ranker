@@ -1367,6 +1367,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               <button type="button" id="albumDeleteButton" class="danger">Delete Album</button>
             </div>
             <form id="albumDetailForm">
+              <input type="hidden" name="cover_image_path" id="coverImagePathField" value="{_escape(album.cover_image_path or '')}">
               <input type="hidden" name="cover_source_url" value="{_escape(album.cover_source_url)}">
               <input type="hidden" name="artist_description_source_url" value="{_escape(album.artist_description_source_url)}">
               <input type="hidden" name="artist_description_source_label" value="{_escape(album.artist_description_source_label)}">
@@ -1474,6 +1475,8 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               if (data.cover_image_path) {{
                 const name = data.cover_image_path.split("/").pop();
                 coverImg.src = "/library-data/covers/" + name + "?t=" + Date.now();
+                const pathField = document.getElementById("coverImagePathField");
+                if (pathField) pathField.value = data.cover_image_path;
               }}
             }} catch (e) {{ console.error("Cover upload error:", e); }}
           }});
@@ -1526,7 +1529,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
                 genre: form.genre.value.trim() || null,
                 rating: (function() {{ const v = Number(document.getElementById('starRatingRow').dataset.current); return v || null; }})(),
                 duration_seconds: parseDuration(form.duration.value),
-                cover_image_path: null,
+                cover_image_path: form.cover_image_path.value.trim() || null,
                 cover_source_url: form.cover_source_url.value.trim() || null,
                 notes: form.notes.value.trim() || null,
                 tracks: parseTracklist(form.tracklist_text.value),
