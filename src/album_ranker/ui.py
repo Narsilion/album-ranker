@@ -40,6 +40,19 @@ def _display_multiline_text(value: str | None) -> str:
     return html.escape(text)
 
 
+def _rating_markup(rating: int | None) -> str:
+    if not rating:
+        return ""
+    filled = "&#9733;" * int(rating)
+    empty = "&#9734;" * (10 - int(rating))
+    return (
+        f'<div class="rating-line" aria-label="Rating: {rating} out of 10">'
+        f'<span class="stars">{filled}{empty}</span>'
+        f'<span class="rating-value">{rating}/10</span>'
+        f"</div>"
+    )
+
+
 def _shell(title: str, active: str, body: str, *, page_state: dict[str, object]) -> str:
     navigation = [
         ("Artists", "/artists", "artists"),
@@ -58,6 +71,7 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{_escape(title)}</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127925;</text></svg>">
     <style>
       :root {{
         --bg: #071018;
@@ -298,6 +312,61 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         color: var(--muted);
         font-size: 14px;
       }}
+      .rating-line {{
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+        color: var(--accent-strong);
+        font-size: 13px;
+      }}
+      .stars {{
+        letter-spacing: 0.08em;
+      }}
+      .rating-value {{
+        color: var(--muted);
+        font-size: 12px;
+      }}
+      .star-widget {{
+        margin-top: 14px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+      }}
+      .star-widget-row {{
+        display: flex;
+        gap: 1px;
+      }}
+      .star-btn {{
+        background: none;
+        border: none;
+        padding: 1px 2px;
+        font-size: 26px;
+        line-height: 1;
+        color: #3a4f61;
+        cursor: pointer;
+        transition: color 0.1s, transform 0.12s;
+        user-select: none;
+      }}
+      .star-btn.on {{
+        color: var(--accent);
+      }}
+      .star-btn:hover {{
+        transform: scale(1.2);
+      }}
+      .star-widget-label {{
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+        min-height: 18px;
+        letter-spacing: 0.02em;
+      }}
+      .star-widget-status {{
+        font-size: 11px;
+        color: var(--accent-strong);
+        min-height: 14px;
+      }}
       .filters {{
         display: flex;
         gap: 10px;
@@ -352,9 +421,10 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
       }}
       .detail-layout {{
         display: grid;
-        grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
-        gap: 24px;
+        grid-template-columns: minmax(280px, 380px) minmax(0, 480px);
+        gap: 96px;
         margin-top: 20px;
+        align-items: start;
       }}
       .meta-stack {{
         display: grid;
@@ -402,9 +472,17 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         padding: 10px 12px;
         border-radius: 14px;
         background: rgba(255, 255, 255, 0.03);
+        font-size: 15px;
       }}
       .track-row .muted {{
         text-align: right;
+      }}
+      .track-num {{
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        font-size: 14px;
+        color: var(--muted);
       }}
       .list-block {{
         border-radius: 22px;
@@ -570,8 +648,14 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         return response.json();
       }}
       document.querySelectorAll("[data-toggle-clamp]").forEach((button) => {{
+        const target = document.getElementById(button.dataset.toggleClamp);
+        if (!target) return;
+        const isOverflowing = target.scrollHeight > target.clientHeight + 2;
+        if (!isOverflowing) {{
+          button.classList.add("hidden");
+          return;
+        }}
         button.addEventListener("click", () => {{
-          const target = document.getElementById(button.dataset.toggleClamp);
           target.classList.toggle("expanded");
           button.textContent = target.classList.contains("expanded") ? "LESS" : "MORE";
         }});
@@ -582,13 +666,6 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
 
 
 def _artist_markup(artist: ArtistWithAlbumsRecord) -> str:
-    description = artist.description or "No description yet."
-    clamp_id = f"artist-description-{artist.id}"
-    source_link = (
-        f'<a class="tag" href="{_escape(artist.description_source_url)}" target="_blank" rel="noreferrer">Open Source</a>'
-        if artist.description_source_url
-        else ""
-    )
     return f"""
       <article class="artist-card">
         <div class="row">
@@ -596,13 +673,10 @@ def _artist_markup(artist: ArtistWithAlbumsRecord) -> str:
             <h3><a href="/artists/{artist.id}" style="text-decoration:none;">{_escape(artist.name)}</a></h3>
           </div>
           <div class="row" style="justify-content:flex-end; flex:0 0 auto;">
-            {source_link}
             <button type="button" class="secondary edit-artist" data-artist='{_json(artist.model_dump())}'>Edit</button>
             <button type="button" class="danger delete-artist" data-artist-id="{artist.id}" data-artist-name="{_escape(artist.name)}">Delete</button>
           </div>
         </div>
-        <div id="{clamp_id}" class="clamp muted">{_escape(description)}</div>
-        <button type="button" class="toggle-link" data-toggle-clamp="{clamp_id}">MORE</button>
       </article>
     """
 
@@ -610,12 +684,14 @@ def _artist_markup(artist: ArtistWithAlbumsRecord) -> str:
 def _album_card_markup(album: AlbumCardRecord) -> str:
     artist_line = " • ".join(part for part in [album.artist_name, str(album.release_year or "")] if part).strip()
     genre_line = album.genre or ""
+    rating_markup = _rating_markup(album.rating)
     return f"""
       <a class="album-card" href="/albums/{album.id}" data-genre="{_escape(album.genre)}" data-year="{_escape(str(album.release_year or ''))}" data-artist="{_escape(album.artist_name)}">
         <div class="cover"><img src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover"></div>
         <div class="album-title">{_escape(album.title)}</div>
         <div class="album-subtitle">{_escape(artist_line)}</div>
         <div class="album-subtitle">{_escape(genre_line)}</div>
+        {rating_markup}
       </a>
     """
 
@@ -660,7 +736,6 @@ def render_artists_page(
     imports: list[ImportDraftRecord],
 ) -> str:
     artists_markup = "".join(_artist_markup(artist) for artist in artists) or '<p class="muted">No artists yet.</p>'
-    latest_artist_import = next((draft.model_dump() for draft in imports if draft.target_type == "artist"), None)
     has_artists = bool(artists)
     body = f"""
       <section class="hero">
@@ -678,10 +753,6 @@ def render_artists_page(
         <section class="panel">
           <div class="panel-title">Artist Import</div>
           <form id="artistImportForm">
-            <div class="form-field">
-              <label class="form-label" for="artistImportName">Artist Name</label>
-              <input id="artistImportName" name="artist_name" placeholder="Artist name">
-            </div>
             <div class="form-field">
               <label class="form-label" for="artistImportSourceUrl">Source URL</label>
               <input id="artistImportSourceUrl" name="source_url" placeholder="Source URL" required>
@@ -752,7 +823,6 @@ def render_artists_page(
         <div>{artists_markup}</div>
       </section>
       <script>
-        const latestArtistImport = {_json(latest_artist_import)};
         const artistForm = document.getElementById("artistForm");
         const artistToolsPanel = document.getElementById("artistToolsPanel");
         const artistImportForm = document.getElementById("artistImportForm");
@@ -838,27 +908,12 @@ def render_artists_page(
           const response = await fetchJson("/api/import/artist", {{
             method: "POST",
             body: JSON.stringify({{
-              artist_name: artistImportForm.artist_name.value.trim(),
+              artist_name: "",
               source_url: artistImportForm.source_url.value.trim() || null,
             }}),
           }});
           fillArtistImportDraft(response.draft);
           artistImportStatus.textContent = "Draft ready for review.";
-        }});
-        artistAlbumImportForm.addEventListener("submit", async (event) => {{
-          event.preventDefault();
-          artistAlbumImportStatus.textContent = "Creating draft...";
-          const form = event.currentTarget;
-          const response = await fetchJson("/api/import/album", {{
-            method: "POST",
-            body: JSON.stringify({{
-              artist_name: form.artist_name.value.trim(),
-              album_title: form.album_title.value.trim(),
-              source_url: form.source_url.value.trim() || null,
-            }}),
-          }});
-          fillArtistAlbumDraft(response.draft);
-          artistAlbumImportStatus.textContent = "Draft ready for review.";
         }});
         artistConfirmForm.addEventListener("submit", async (event) => {{
           event.preventDefault();
@@ -879,7 +934,6 @@ def render_artists_page(
           }});
           window.location.reload();
         }});
-        if (latestArtistImport) fillArtistImportDraft(latestArtistImport);
         syncArtistToolsToggle();
       </script>
     """
@@ -927,14 +981,6 @@ def render_artist_detail_page(
         <form id="artistAlbumImportForm">
           <input type="hidden" name="artist_name" value="{_escape(artist.name)}">
           <div class="form-field">
-            <label class="form-label" for="artistAlbumImportArtistName">Artist Name</label>
-            <input id="artistAlbumImportArtistName" value="{_escape(artist.name)}" disabled>
-          </div>
-          <div class="form-field">
-            <label class="form-label" for="artistAlbumImportTitle">Album Name</label>
-            <input id="artistAlbumImportTitle" name="album_title" placeholder="Album name">
-          </div>
-          <div class="form-field">
             <label class="form-label" for="artistAlbumImportSourceUrl">Source URL</label>
             <input id="artistAlbumImportSourceUrl" name="source_url" placeholder="Source URL" required>
           </div>
@@ -947,6 +993,9 @@ def render_artist_detail_page(
           <form id="artistAlbumConfirmForm">
             <input type="hidden" name="draft_id">
             <input type="hidden" name="artist_name" value="{_escape(artist.name)}">
+            <input type="hidden" name="artist_description" value="{_escape(artist.description)}">
+            <input type="hidden" name="artist_description_source_url" value="{_escape(artist.description_source_url)}">
+            <input type="hidden" name="artist_description_source_label" value="{_escape(artist.description_source_label)}">
             <div class="form-field">
               <label class="form-label" for="artistAlbumConfirmArtistName">Artist</label>
               <input id="artistAlbumConfirmArtistName" value="{_escape(artist.name)}" disabled>
@@ -974,26 +1023,12 @@ def render_artist_detail_page(
               <input id="artistAlbumConfirmCoverUrl" name="cover_source_url" placeholder="Cover source URL">
             </div>
             <div class="form-field">
-              <label class="form-label" for="artistAlbumConfirmArtistDescription">Artist Description</label>
-              <textarea id="artistAlbumConfirmArtistDescription" name="artist_description" placeholder="Artist description">{_escape(artist.description)}</textarea>
-            </div>
-            <div class="row">
-              <div class="form-field">
-                <label class="form-label" for="artistAlbumConfirmDescriptionUrl">Description Source URL</label>
-                <input id="artistAlbumConfirmDescriptionUrl" name="artist_description_source_url" placeholder="Description source URL" value="{_escape(artist.description_source_url)}">
-              </div>
-              <div class="form-field">
-                <label class="form-label" for="artistAlbumConfirmDescriptionLabel">Source Label</label>
-                <input id="artistAlbumConfirmDescriptionLabel" name="artist_description_source_label" placeholder="Source label" value="{_escape(artist.description_source_label)}">
-              </div>
-            </div>
-            <div class="form-field">
               <label class="form-label" for="artistAlbumConfirmExternalUrl">Album External URL</label>
               <input id="artistAlbumConfirmExternalUrl" name="album_external_url" placeholder="Album external URL">
             </div>
             <div class="form-field">
-              <label class="form-label" for="artistAlbumConfirmNotes">Additional Notes</label>
-              <textarea id="artistAlbumConfirmNotes" name="notes" placeholder="Additional notes"></textarea>
+              <label class="form-label" for="artistAlbumConfirmNotes">Album Description</label>
+              <textarea id="artistAlbumConfirmNotes" name="notes" placeholder="Album description"></textarea>
             </div>
             <div class="form-field">
               <label class="form-label" for="artistAlbumConfirmTracklist">Tracklist</label>
@@ -1035,6 +1070,7 @@ def render_artist_detail_page(
             title: form.title.value.trim(),
             release_year: form.release_year.value.trim() ? Number(form.release_year.value.trim()) : null,
             genre: form.genre.value.trim() || null,
+            rating: null,
             duration_seconds: parseDuration(form.duration.value),
             cover_source_url: form.cover_source_url.value.trim() || null,
             cover_image_path: null,
@@ -1053,9 +1089,6 @@ def render_artist_detail_page(
           artistAlbumConfirmForm.genre.value = payload.genre || "";
           artistAlbumConfirmForm.duration.value = formatDuration(payload.duration_seconds);
           artistAlbumConfirmForm.cover_source_url.value = payload.cover_source_url || "";
-          artistAlbumConfirmForm.artist_description.value = payload.artist_description || "{_escape(artist.description)}";
-          artistAlbumConfirmForm.artist_description_source_url.value = payload.artist_description_source_url || draft.chosen_source_url || "{_escape(artist.description_source_url)}";
-          artistAlbumConfirmForm.artist_description_source_label.value = payload.artist_description_source_label || "{_escape(artist.description_source_label)}";
           artistAlbumConfirmForm.album_external_url.value = payload.album_external_url || "";
           artistAlbumConfirmForm.notes.value = payload.notes || "";
           artistAlbumConfirmForm.tracklist_text.value = (payload.tracks || []).map((track) => `${{track.track_number}}|${{track.title}}|${{formatDuration(track.duration_seconds)}}`).join("\\n");
@@ -1068,7 +1101,7 @@ def render_artist_detail_page(
             method: "POST",
             body: JSON.stringify({{
               artist_name: form.artist_name.value.trim(),
-              album_title: form.album_title.value.trim(),
+              album_title: null,
               source_url: form.source_url.value.trim() || null,
             }}),
           }});
@@ -1079,6 +1112,9 @@ def render_artist_detail_page(
           artistAlbumImportReview.classList.add("hidden");
           artistAlbumConfirmForm.reset();
           artistAlbumConfirmForm.artist_name.value = "{_escape(artist.name)}";
+          artistAlbumConfirmForm.artist_description.value = "{_escape(artist.description)}";
+          artistAlbumConfirmForm.artist_description_source_url.value = "{_escape(artist.description_source_url)}";
+          artistAlbumConfirmForm.artist_description_source_label.value = "{_escape(artist.description_source_label)}";
           artistAlbumImportStatus.textContent = "";
         }});
         artistAlbumConfirmForm.addEventListener("submit", async (event) => {{
@@ -1088,7 +1124,7 @@ def render_artist_detail_page(
             method: "POST",
             body: JSON.stringify({{
               target_type: "album",
-              chosen_source_url: artistAlbumConfirmForm.artist_description_source_url.value.trim() || null,
+              chosen_source_url: artistAlbumConfirmForm.album_external_url.value.trim() || null,
               payload: artistAlbumPayload(artistAlbumConfirmForm),
             }}),
           }});
@@ -1144,6 +1180,7 @@ def render_albums_page(
             <div class="row">
               <input name="release_year" placeholder="Year">
               <input name="genre" placeholder="Genre">
+              <input name="rating" type="number" min="1" max="10" placeholder="Rating 1-10">
               <input name="duration" placeholder="Length e.g. 42:18">
             </div>
             <input name="album_external_url" placeholder="Album external URL">
@@ -1194,6 +1231,7 @@ def render_albums_page(
             title: form.title.value.trim(),
             release_year: form.release_year.value.trim() ? Number(form.release_year.value.trim()) : null,
             genre: form.genre.value.trim() || null,
+            rating: form.rating.value.trim() ? Number(form.rating.value.trim()) : null,
             duration_seconds: parseDuration(form.duration.value),
             cover_source_url: form.cover_source_url.value.trim() || null,
             cover_image_path: null,
@@ -1239,7 +1277,7 @@ def render_albums_page(
 
 def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord) -> str:
     track_rows = "".join(
-        f'<div class="track-row"><div>{track.track_number}.</div><div>{_escape(track.title)}</div><div class="muted">{_escape(seconds_to_display(track.duration_seconds))}</div></div>'
+        f'<div class="track-row"><div class="track-num" style="display:flex;justify-content:flex-end;align-items:center;">{track.track_number}.</div><div>{_escape(track.title)}</div><div class="muted">{_escape(seconds_to_display(track.duration_seconds))}</div></div>'
         for track in album.tracks
     ) or '<p class="muted">No tracklist yet.</p>'
     description_title = "Album Description" if album.notes else "Artist Description"
@@ -1247,6 +1285,11 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
     description_text = _display_multiline_text(raw_description_text)
     description_source_url = album.album_external_url or album.artist_description_source_url
     description_source_label = "Open Source" if description_source_url else ""
+    star_buttons = "".join(
+        f'<button type="button" class="star-btn{" on" if (album.rating or 0) >= i else ""}" data-value="{i}" aria-label="Rate {i} out of 10">&#9733;</button>'
+        for i in range(1, 11)
+    )
+    star_initial_label = f"{album.rating}/10" if album.rating else "Rate this album"
     body = f"""
       <section class="hero">
         <div class="eyebrow">Album Details</div>
@@ -1256,6 +1299,11 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
       <section class="detail-layout">
         <div>
           <div class="cover"><img src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover"></div>
+          <div class="star-widget">
+            <div class="star-widget-row" id="starRatingRow" data-album-id="{album.id}" data-current="{album.rating or 0}">{star_buttons}</div>
+            <div class="star-widget-label" id="starWidgetLabel">{_escape(star_initial_label)}</div>
+            <div class="star-widget-status" id="starWidgetStatus"></div>
+          </div>
           <div class="meta-stack">
             <div class="detail-head">
               <div class="meta-item" style="flex:1;">
@@ -1273,16 +1321,8 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               {_escape(album.genre or 'Unknown genre')}
             </div>
           </div>
-          <section class="panel" style="margin-top:18px;">
-            <div class="panel-title">{_escape(description_title)}</div>
-            <div id="albumArtistDescription" class="clamp">{description_text}</div>
-            <div class="row" style="margin-top:8px;">
-              <button type="button" class="toggle-link" data-toggle-clamp="albumArtistDescription">MORE</button>
-              {f'<a class="tag" href="{_escape(description_source_url)}" target="_blank" rel="noreferrer">{_escape(description_source_label)}</a>' if description_source_url else ''}
-            </div>
-          </section>
         </div>
-        <div class="grid">
+        <div class="grid" style="align-self:start; margin-top:0;">
           <section class="panel">
             <div class="panel-title">Tracklist</div>
             <div class="tracklist">{track_rows}</div>
@@ -1339,7 +1379,48 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           </section>
         </div>
       </section>
+      <section class="panel" style="margin-top:16px; max-width:884px;">
+        <div class="panel-title">{_escape(description_title)}</div>
+        <div id="albumArtistDescription" class="clamp">{description_text}</div>
+        <div class="row" style="margin-top:8px;">
+          <button type="button" class="toggle-link" data-toggle-clamp="albumArtistDescription" style="flex:0 0 auto;">MORE</button>
+          {f'<a class="tag" href="{_escape(description_source_url)}" target="_blank" rel="noreferrer" style="flex:0 0 auto;">{_escape(description_source_label)}</a>' if description_source_url else ''}
+        </div>
+      </section>
       <script>
+        (function() {{
+          const row = document.getElementById('starRatingRow');
+          const stars = row.querySelectorAll('.star-btn');
+          const label = document.getElementById('starWidgetLabel');
+          const status = document.getElementById('starWidgetStatus');
+          let current = Number(row.dataset.current) || 0;
+          function highlight(n) {{
+            stars.forEach((s, i) => s.classList.toggle('on', i < n));
+            label.textContent = n ? n + '/10' : 'Rate this album';
+          }}
+          highlight(current);
+          stars.forEach((star, idx) => {{
+            star.addEventListener('mouseenter', () => highlight(idx + 1));
+            star.addEventListener('mouseleave', () => highlight(current));
+            star.addEventListener('click', async () => {{
+              const newVal = (idx + 1 === current) ? null : idx + 1;
+              try {{
+                status.textContent = 'Saving\u2026';
+                await fetchJson('/api/albums/{album.id}/rating', {{
+                  method: 'PATCH',
+                  body: JSON.stringify({{ rating: newVal }}),
+                }});
+                current = newVal || 0;
+                row.dataset.current = current;
+                highlight(current);
+                status.textContent = '\u2713 Saved';
+                setTimeout(() => {{ status.textContent = ''; }}, 1500);
+              }} catch (err) {{
+                status.textContent = err.message;
+              }}
+            }});
+          }});
+        }})();
         const albumEditToggle = document.getElementById("albumEditToggle");
         const albumEditPanel = document.getElementById("albumEditPanel");
         const albumDeleteButton = document.getElementById("albumDeleteButton");
@@ -1385,6 +1466,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
                 title: form.title.value.trim(),
                 release_year: form.release_year.value.trim() ? Number(form.release_year.value.trim()) : null,
                 genre: form.genre.value.trim() || null,
+                rating: (function() {{ const v = Number(document.getElementById('starRatingRow').dataset.current); return v || null; }})(),
                 duration_seconds: parseDuration(form.duration.value),
                 cover_image_path: null,
                 cover_source_url: form.cover_source_url.value.trim() || null,
@@ -1403,9 +1485,17 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
     return _shell(f"{album.title} | Album Ranker", "details", body, page_state=state)
 
 
-def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], albums: list[AlbumCardRecord]) -> str:
+def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], albums: list[AlbumCardRecord], genres: list[GenreRecord]) -> str:
     list_markup = "".join(_list_markup(record) for record in lists) or '<p class="muted">No ranking lists yet.</p>'
     has_lists = bool(lists)
+    existing_list_names = _json([lst.name for lst in lists])
+    unique_years = sorted({a.release_year for a in albums if a.release_year}, reverse=True)
+    year_options = "<option value=''>All time</option>" + "".join(
+        f"<option value='{y}'>{y}</option>" for y in unique_years
+    )
+    genre_options = "<option value=''>All genres</option>" + "".join(
+        f"<option value='{_escape(g.name)}'>{_escape(g.name)}</option>" for g in sorted(genres, key=lambda g: g.name)
+    )
     body = f"""
       <section class="hero">
         <div class="eyebrow">Lists</div>
@@ -1414,13 +1504,10 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
       </section>
       <section class="panel" style="margin-top:20px;">
         <div class="detail-head">
-          <div class="panel-title" style="margin-bottom:0;">List Tools</div>
-          {('<button type="button" id="listToolsToggle" class="secondary" title="Toggle list tools">Show Tools</button>' if has_lists else '')}
+          <div class="panel-title" style="margin-bottom:0;">Create List</div>
+          {('<button type="button" id="listToolsToggle" class="secondary" title="Toggle create list">Show</button>' if has_lists else '')}
         </div>
-      </section>
-      <div id="listToolsPanel" class="grid {('hidden' if has_lists else '')}">
-        <section class="panel">
-          <div class="panel-title">Create List</div>
+        <div id="listToolsPanel" class="{('hidden' if has_lists else '')}" style="margin-top:14px;">
           <form id="listForm">
             <input name="name" placeholder="List name" required>
             <textarea name="description" placeholder="Description"></textarea>
@@ -1433,20 +1520,162 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
               <span class="status" id="listFormStatus"></span>
             </div>
           </form>
-        </section>
-      </div>
+        </div>
+      </section>
+      <section class="panel" style="margin-top:16px;">
+        <div class="detail-head">
+          <div class="panel-title" style="margin-bottom:0;">Automatic Lists</div>
+          <button type="button" id="autoListToggle" class="secondary">Show</button>
+        </div>
+        <div id="autoListPanel" class="hidden" style="margin-top:14px;">
+          <div style="margin-bottom:12px; color:var(--muted); font-size:13px;">Choose a wizard, configure it, and generate a list automatically.</div>
+          <div class="row" style="margin-bottom:16px; align-items:flex-start;">
+            <button type="button" class="auto-wizard-tab secondary" data-wizard="best-rated" style="flex:0 0 auto;">&#9733; Best Rated</button>
+          </div>
+          <div id="wizard-best-rated" class="auto-wizard hidden">
+            <div class="panel" style="background:rgba(255,255,255,0.03); border:1px solid var(--line);">
+              <div class="panel-title" style="font-size:13px; margin-bottom:12px;">Best Rated Albums</div>
+              <div class="row">
+                <div class="form-field" style="flex:1;">
+                  <label class="form-label">Time period</label>
+                  <select id="brYear">{year_options}</select>
+                </div>
+                <div class="form-field" style="flex:1;">
+                  <label class="form-label">Genre</label>
+                  <select id="brGenre">{genre_options}</select>
+                </div>
+                <div class="form-field" style="flex:0 0 100px;">
+                  <label class="form-label">How many</label>
+                  <input id="brLimit" type="number" min="1" max="500" value="10" style="width:100%;">
+                </div>
+              </div>
+              <div class="form-field" style="margin-top:8px;">
+                <label class="form-label">List name</label>
+                <input id="brName" type="text" style="width:100%;">
+              </div>
+              <div class="row" style="margin-top:12px;">
+                <button type="button" id="brGenerate" style="flex:0 0 auto;">Generate</button>
+                <span class="status" id="brStatus"></span>
+              </div>
+              <div id="brConflictBox" class="hidden" style="margin-top:12px; padding:12px; border-radius:12px; background:rgba(255,122,61,0.08); border:1px solid rgba(255,122,61,0.3);">
+                <div style="font-size:13px; margin-bottom:10px;">A list named <strong id="brConflictName"></strong> already exists. What would you like to do?</div>
+                <div class="row">
+                  <button type="button" id="brUpdateExisting" style="flex:0 0 auto;">Update existing</button>
+                  <button type="button" id="brCreateNew" class="secondary" style="flex:0 0 auto;">Create with new name</button>
+                </div>
+                <div class="form-field hidden" id="brNewNameField" style="margin-top:10px;">
+                  <label class="form-label">New name</label>
+                  <input id="brNewName" type="text" style="width:100%;">
+                  <button type="button" id="brCreateNewConfirm" style="margin-top:8px; flex:0 0 auto;">Create</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
       <section class="grid" style="margin-top:20px;">{list_markup}</section>
       <script>
+        const existingListNames = {existing_list_names};
         const listToolsPanel = document.getElementById("listToolsPanel");
         const listToolsToggle = document.getElementById("listToolsToggle");
         function syncListToolsToggle() {{
           if (!listToolsToggle) return;
-          listToolsToggle.textContent = listToolsPanel.classList.contains("hidden") ? "Show Tools" : "Hide Tools";
+          listToolsToggle.textContent = listToolsPanel.classList.contains("hidden") ? "Show" : "Hide";
         }}
         listToolsToggle?.addEventListener("click", () => {{
           listToolsPanel.classList.toggle("hidden");
           syncListToolsToggle();
         }});
+
+        // ── Automatic Lists ──────────────────────────────────────────────────
+        const autoListToggle = document.getElementById("autoListToggle");
+        const autoListPanel = document.getElementById("autoListPanel");
+        autoListToggle.addEventListener("click", () => {{
+          autoListPanel.classList.toggle("hidden");
+          autoListToggle.textContent = autoListPanel.classList.contains("hidden") ? "Show" : "Hide";
+        }});
+        document.querySelectorAll(".auto-wizard-tab").forEach((btn) => {{
+          btn.addEventListener("click", () => {{
+            document.querySelectorAll(".auto-wizard").forEach((w) => w.classList.add("hidden"));
+            document.querySelectorAll(".auto-wizard-tab").forEach((b) => b.classList.remove("active"));
+            document.getElementById("wizard-" + btn.dataset.wizard).classList.remove("hidden");
+            btn.classList.add("active");
+          }});
+        }});
+
+        // Best Rated wizard ───────────────────────────────────────────────────
+        function buildBestRatedName() {{
+          const year = document.getElementById("brYear").value;
+          const genre = document.getElementById("brGenre").value;
+          const limit = document.getElementById("brLimit").value || "10";
+          let name = "Best Rated";
+          if (genre) name += " " + genre;
+          if (year) name += " " + year;
+          name += " (Top " + limit + ")";
+          return name;
+        }}
+        function syncBestRatedName() {{
+          const nameInput = document.getElementById("brName");
+          nameInput.value = buildBestRatedName();
+        }}
+        ["brYear", "brGenre", "brLimit"].forEach((id) => {{
+          document.getElementById(id).addEventListener("change", syncBestRatedName);
+          document.getElementById(id).addEventListener("input", syncBestRatedName);
+        }});
+        syncBestRatedName();
+
+        async function submitBestRated(name, updateExisting) {{
+          const status = document.getElementById("brStatus");
+          const year = document.getElementById("brYear").value;
+          const genre = document.getElementById("brGenre").value;
+          const limit = Number(document.getElementById("brLimit").value) || 10;
+          try {{
+            status.textContent = "Generating\u2026";
+            await fetchJson("/api/auto-lists/best-rated", {{
+              method: "POST",
+              body: JSON.stringify({{
+                name,
+                limit,
+                year: year ? Number(year) : null,
+                genre: genre || null,
+                update_existing: updateExisting,
+              }}),
+            }});
+            window.location.reload();
+          }} catch (err) {{
+            if (err.message && err.message.includes("already exists")) {{
+              status.textContent = "";
+              const conflictBox = document.getElementById("brConflictBox");
+              document.getElementById("brConflictName").textContent = name;
+              conflictBox.classList.remove("hidden");
+            }} else {{
+              status.textContent = err.message;
+            }}
+          }}
+        }}
+
+        document.getElementById("brGenerate").addEventListener("click", () => {{
+          document.getElementById("brConflictBox").classList.add("hidden");
+          document.getElementById("brNewNameField").classList.add("hidden");
+          submitBestRated(document.getElementById("brName").value.trim(), false);
+        }});
+        document.getElementById("brUpdateExisting").addEventListener("click", () => {{
+          document.getElementById("brConflictBox").classList.add("hidden");
+          submitBestRated(document.getElementById("brName").value.trim(), true);
+        }});
+        document.getElementById("brCreateNew").addEventListener("click", () => {{
+          const newNameField = document.getElementById("brNewNameField");
+          document.getElementById("brNewName").value = document.getElementById("brName").value.trim() + " (2)";
+          newNameField.classList.remove("hidden");
+        }});
+        document.getElementById("brCreateNewConfirm").addEventListener("click", () => {{
+          const newName = document.getElementById("brNewName").value.trim();
+          if (!newName) return;
+          document.getElementById("brConflictBox").classList.add("hidden");
+          submitBestRated(newName, false);
+        }});
+        // ─────────────────────────────────────────────────────────────────────
+
         document.getElementById("listForm").addEventListener("submit", async (event) => {{
           event.preventDefault();
           const form = event.currentTarget;

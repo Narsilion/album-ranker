@@ -44,11 +44,16 @@ class AlbumUpsert(BaseModel):
     title: str
     release_year: int | None = Field(default=None, ge=1000, le=9999)
     genre: str | None = None
+    rating: int | None = Field(default=None, ge=1, le=10)
     duration_seconds: int | None = Field(default=None, ge=0)
     cover_image_path: str | None = None
     cover_source_url: str | None = None
     notes: str | None = None
     tracks: list[TrackUpsert] = Field(default_factory=list)
+
+
+class AlbumRatingPatch(BaseModel):
+    rating: int | None = Field(default=None, ge=1, le=10)
 
 
 class AlbumCardRecord(BaseModel):
@@ -58,6 +63,7 @@ class AlbumCardRecord(BaseModel):
     title: str
     release_year: int | None = None
     genre: str | None = None
+    rating: int | None = Field(default=None, ge=1, le=10)
     duration_seconds: int | None = None
     cover_image_path: str | None = None
     cover_source_url: str | None = None
@@ -109,6 +115,14 @@ class AlbumListItemAddRequest(BaseModel):
 
 class ReorderListItemsRequest(BaseModel):
     item_ids: list[int] = Field(default_factory=list)
+
+
+class AutoListBestRatedRequest(BaseModel):
+    name: str
+    limit: int = Field(default=10, ge=1, le=500)
+    year: int | None = Field(default=None, ge=1000, le=9999)
+    genre: str | None = None
+    update_existing: bool = False
 
 
 class GenreUpsert(BaseModel):
@@ -167,6 +181,7 @@ class AlbumDraftData(BaseModel):
     album_title: str
     release_year: int | None = None
     genre: str | None = None
+    rating: int | None = Field(default=None, ge=1, le=10)
     duration_seconds: int | None = None
     cover_source_url: str | None = None
     notes: str | None = None
@@ -263,6 +278,7 @@ class AlbumFormPayload(BaseModel):
     title: str
     release_year: int | None = Field(default=None, ge=1000, le=9999)
     genre: str | None = None
+    rating: int | None = Field(default=None, ge=1, le=10)
     duration: str | None = None
     cover_image_path: str | None = None
     cover_source_url: str | None = None
@@ -305,6 +321,7 @@ class AlbumFormPayload(BaseModel):
             title=self.title,
             release_year=self.release_year,
             genre=self.genre,
+            rating=self.rating,
             duration_seconds=display_to_seconds(self.duration),
             cover_image_path=self.cover_image_path,
             cover_source_url=self.cover_source_url,

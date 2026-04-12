@@ -12,10 +12,12 @@ from album_ranker.importer import CoverDownloader, MetadataImporter, draft_to_js
 from album_ranker.openai_client import OpenAIClient
 from album_ranker.schemas import (
     AlbumDetailRecord,
+    AlbumRatingPatch,
     AlbumListItemAddRequest,
     AlbumListRecord,
     AlbumListUpsert,
     AlbumUpsert,
+    AutoListBestRatedRequest,
     GenreRecord,
     GenreUpsert,
     ArtistRecord,
@@ -137,7 +139,7 @@ def create_app(
 
     @app.get("/lists", response_class=HTMLResponse)
     async def lists_page() -> str:
-        return render_lists_page(build_settings(), db.list_lists(), db.list_albums())
+        return render_lists_page(build_settings(), db.list_lists(), db.list_albums(), db.list_genres())
 
     @app.get("/lists/{list_id}", response_class=HTMLResponse)
     async def list_detail_page(list_id: int) -> str:
@@ -232,6 +234,13 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.patch("/api/albums/{album_id}/rating", response_model=AlbumDetailRecord)
+    async def patch_album_rating(album_id: int, payload: AlbumRatingPatch) -> AlbumDetailRecord:
+        try:
+            return db.patch_album_rating(album_id, payload.rating)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.delete("/api/albums/{album_id}")
     async def delete_album(album_id: int) -> dict[str, bool]:
         try:
@@ -285,6 +294,13 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"ok": True}
+
+    @app.post("/api/auto-lists/best-rated", response_model=AlbumListRecord)
+    async def auto_list_best_rated(payload: AutoListBestRatedRequest) -> AlbumListRecord:
+        try:
+            return db.auto_list_best_rated(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/import/artist", response_model=ImportDraftResponse)
     async def import_artist(payload: ImportRequest) -> ImportDraftResponse:

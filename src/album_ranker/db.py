@@ -15,6 +15,7 @@ from album_ranker.schemas import (
     AlbumListRecord,
     AlbumListUpsert,
     AlbumUpsert,
+    AutoListBestRatedRequest,
     GenreRecord,
     GenreUpsert,
     ArtistRecord,
@@ -65,6 +66,7 @@ class Database:
                     title TEXT NOT NULL,
                     release_year INTEGER,
                     genre TEXT,
+                    rating INTEGER,
                     duration_seconds INTEGER,
                     cover_image_path TEXT,
                     cover_source_url TEXT,
@@ -138,6 +140,8 @@ class Database:
             album_columns = {row["name"] for row in connection.execute("PRAGMA table_info(albums)").fetchall()}
             if "album_external_url" not in album_columns:
                 connection.execute("ALTER TABLE albums ADD COLUMN album_external_url TEXT")
+            if "rating" not in album_columns:
+                connection.execute("ALTER TABLE albums ADD COLUMN rating INTEGER")
 
     @contextmanager
     def connection(self) -> sqlite3.Connection:
@@ -421,15 +425,16 @@ class Database:
             cursor = connection.execute(
                 """
                 INSERT INTO albums(
-                    artist_id, title, release_year, genre, duration_seconds, cover_image_path,
+                    artist_id, title, release_year, genre, rating, duration_seconds, cover_image_path,
                     cover_source_url, album_external_url, notes, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     artist_id,
                     payload.title,
                     payload.release_year,
                     payload.genre,
+                    payload.rating,
                     payload.duration_seconds,
                     payload.cover_image_path,
                     payload.cover_source_url,
@@ -450,7 +455,7 @@ class Database:
             connection.execute(
                 """
                 UPDATE albums
-                SET artist_id = ?, title = ?, release_year = ?, genre = ?, duration_seconds = ?,
+                SET artist_id = ?, title = ?, release_year = ?, genre = ?, rating = ?, duration_seconds = ?,
                     cover_image_path = ?, cover_source_url = ?, album_external_url = ?, notes = ?, updated_at = ?
                 WHERE id = ?
                 """,
@@ -459,6 +464,7 @@ class Database:
                     payload.title,
                     payload.release_year,
                     payload.genre,
+                    payload.rating,
                     payload.duration_seconds,
                     payload.cover_image_path,
                     payload.cover_source_url,
@@ -469,6 +475,15 @@ class Database:
                 ),
             )
             self._replace_tracks(connection, album_id, payload)
+        return self.get_album(album_id)
+
+    def patch_album_rating(self, album_id: int, rating: int | None) -> AlbumDetailRecord:
+        self.get_album(album_id)
+        with self.connection() as connection:
+            connection.execute(
+                "UPDATE albums SET rating = ?, updated_at = ? WHERE id = ?",
+                (rating, utc_now_iso(), album_id),
+            )
         return self.get_album(album_id)
 
     def delete_album(self, album_id: int) -> None:
@@ -484,7 +499,7 @@ class Database:
             item_rows = connection.execute(
                 """
                 SELECT list_items.id, list_items.list_id, list_items.album_id, list_items.rank_position,
-                       albums.artist_id, albums.title, albums.release_year, albums.genre, albums.duration_seconds,
+                       albums.artist_id, albums.title, albums.release_year, albums.genre, albums.rating, albums.duration_seconds,
                        albums.cover_image_path, albums.cover_source_url, albums.notes, albums.created_at, albums.updated_at,
                        artists.name AS artist_name
                 FROM list_items
@@ -503,6 +518,7 @@ class Database:
                     "title": row["title"],
                     "release_year": row["release_year"],
                     "genre": row["genre"],
+                    "rating": row["rating"],
                     "duration_seconds": row["duration_seconds"],
                     "cover_image_path": row["cover_image_path"],
                     "cover_source_url": row["cover_source_url"],
@@ -633,6 +649,60 @@ class Database:
                 "UPDATE album_lists SET updated_at = ? WHERE id = ?",
                 (utc_now_iso(), list_id),
             )
+        return self.get_list(list_id)
+
+    def auto_list_best_rated(self, payload: AutoListBestRatedRequest) -> AlbumListRecord:
+        filters = ["rating IS NOT NULL"]
+        params: list[object] = []
+        if payload.year is not None:
+            filters.append("release_year = ?")
+            params.append(payload.year)
+        if payload.genre:
+            filters.append("LOWER(genre) LIKE LOWER(?)")
+            params.append(f"%{payload.genre}%")
+        where = " AND ".join(filters)
+        params.append(payload.limit)
+        with self.connection() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT albums.id
+                FROM albums
+                WHERE {where}
+                ORDER BY
+                    rating DESC,
+                    CASE WHEN LOWER(title) LIKE 'the %' THEN SUBSTR(title, 5)
+                         WHEN LOWER(title) LIKE 'a %' THEN SUBSTR(title, 3)
+                         WHEN LOWER(title) LIKE 'an %' THEN SUBSTR(title, 4)
+                         ELSE title END COLLATE NOCASE ASC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            album_ids = [row["id"] for row in rows]
+            existing = connection.execute(
+                "SELECT id, name FROM album_lists WHERE name = ?", (payload.name,)
+            ).fetchone()
+            if existing and payload.update_existing:
+                list_id = existing["id"]
+                connection.execute(
+                    "UPDATE album_lists SET updated_at = ? WHERE id = ?",
+                    (utc_now_iso(), list_id),
+                )
+                connection.execute("DELETE FROM list_items WHERE list_id = ?", (list_id,))
+            elif existing and not payload.update_existing:
+                raise ValueError(f"A list named '{payload.name}' already exists")
+            else:
+                now = utc_now_iso()
+                cursor = connection.execute(
+                    "INSERT INTO album_lists(name, created_at, updated_at) VALUES (?, ?, ?)",
+                    (payload.name, now, now),
+                )
+                list_id = int(cursor.lastrowid)
+            for rank, album_id in enumerate(album_ids, start=1):
+                connection.execute(
+                    "INSERT INTO list_items(list_id, album_id, rank_position) VALUES (?, ?, ?)",
+                    (list_id, album_id, rank),
+                )
         return self.get_list(list_id)
 
     def create_import_job(self, target_type: str, request: ImportRequest, draft_payload: dict[str, object]) -> ImportDraftRecord:
