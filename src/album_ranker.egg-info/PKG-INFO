@@ -1,0 +1,61 @@
+Metadata-Version: 2.4
+Name: album-ranker
+Version: 0.1.0
+Summary: Local-first album library and ranking web application with FastAPI and SQLite.
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: uvicorn>=0.30.0
+Requires-Dist: pydantic>=2.8.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.3.0; extra == "dev"
+Requires-Dist: httpx>=0.28.0; extra == "dev"
+
+# Album Ranker
+
+Local-first web application for collecting albums, viewing artist and album details, and building ranked lists.
+
+## Features
+
+- dark-theme media-library UI
+- artists, albums, album details, lists, and settings pages
+- SQLite persistence
+- manual CRUD for artists, albums, tracks, and ranking lists
+- optional AI-assisted metadata import with review-before-save
+- local cover image downloads for confirmed imports
+
+## Requirements
+
+- Python 3.11+
+- `OPENAI_API_KEY` only if you want real AI-assisted metadata drafting
+
+## Setup
+
+```bash
+cd /Users/darkcreation/Documents/git_repos/album-ranker
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+```
+
+## Run
+
+```bash
+album-ranker
+```
+
+Default URL: `http://127.0.0.1:8780`
+
+## Environment
+
+- `OPENAI_API_KEY` optional for AI-assisted import
+- `ALBUM_RANKER_MODEL` default `gpt-5`
+- `ALBUM_RANKER_HOST` default `127.0.0.1`
+- `ALBUM_RANKER_PORT` default `8780`
+- `ALBUM_RANKER_DB_PATH` default `./.data/album-ranker.db`
+
+## Tests
+
+```bash
+pytest
+```
