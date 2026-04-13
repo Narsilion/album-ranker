@@ -740,7 +740,7 @@ def _list_markup(record: AlbumListRecord) -> str:
         for item in record.items
     ) or '<div class="rank-item"><div></div><div></div><div class="muted">No albums in this list yet.</div><div></div></div>'
     return f"""
-      <section class="list-block" data-list-id="{record.id}">
+      <section class="list-block" data-list-id="{record.id}" data-list-name="{_escape(record.name)}" data-list-year="{_escape(str(record.year or ''))}" data-list-genre="{_escape(record.genre_filter_hint or '')}" data-list-limit="{max(len(record.items), 10)}">
         <div class="list-head" data-toggle="list-body-{record.id}">
           <div>
             <h3 style="margin:0;"><a href="/lists/{record.id}" style="text-decoration:none;" onclick="event.stopPropagation();">{_escape(record.name)}</a></h3>
@@ -750,9 +750,11 @@ def _list_markup(record: AlbumListRecord) -> str:
         </div>
         <div id="list-body-{record.id}" class="hidden">
           <div class="rank-list">{items}</div>
-          <div style="padding:14px 18px; border-top:1px solid var(--line);">
+          <div style="padding:14px 18px; border-top:1px solid var(--line); display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
             <button type="button" class="save-order">Save</button>
-            <button type="button" class="danger delete-list" style="margin-left:8px;">Delete List</button>
+            <button type="button" class="regenerate-list secondary" title="Re-run the Best Rated wizard and update this list">&#8635; Regenerate</button>
+            <button type="button" class="danger delete-list" style="margin-left:auto;">Delete List</button>
+            <span class="status regenerate-status" style="font-size:13px;"></span>
           </div>
         </div>
       </section>
@@ -1752,6 +1754,29 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
         }});
         // ─────────────────────────────────────────────────────────────────────
 
+        document.querySelectorAll(".regenerate-list").forEach((btn) => {{
+          btn.addEventListener("click", async (e) => {{
+            e.stopPropagation();
+            const block = btn.closest(".list-block");
+            const status = block.querySelector(".regenerate-status");
+            const name = block.dataset.listName;
+            const year = block.dataset.listYear ? Number(block.dataset.listYear) : null;
+            const genre = block.dataset.listGenre || null;
+            const limit = Number(block.dataset.listLimit) || 10;
+            status.textContent = "Regenerating\u2026";
+            btn.disabled = true;
+            try {{
+              await fetchJson("/api/auto-lists/best-rated", {{
+                method: "POST",
+                body: JSON.stringify({{ name, limit, year, genre, update_existing: true }}),
+              }});
+              window.location.reload();
+            }} catch (err) {{
+              status.textContent = err.message;
+              btn.disabled = false;
+            }}
+          }});
+        }});
         document.getElementById("listForm").addEventListener("submit", async (event) => {{
           event.preventDefault();
           const form = event.currentTarget;
