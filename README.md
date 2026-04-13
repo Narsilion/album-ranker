@@ -160,14 +160,21 @@ launchd/com.darkcreation.album-ranker-backup.plist
 **Load the job** (run once after cloning or after editing the plist):
 
 ```bash
-launchctl load ~/Documents/git_repos/album-ranker/launchd/com.darkcreation.album-ranker-backup.plist
+# Create the iCloud backup folder first (launchd won't create it)
+mkdir -p ~/Library/Mobile\ Documents/com~apple~CloudDocs/album-ranker-backups
+
+# Copy the plist to the standard LaunchAgents location
+cp ~/Documents/git_repos/album-ranker/launchd/com.darkcreation.album-ranker-backup.plist \
+   ~/Library/LaunchAgents/
+
+# Register with launchd (modern macOS syntax)
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.darkcreation.album-ranker-backup.plist
 ```
 
 **Check status:**
 
 ```bash
-launchctl list | grep album-ranker-backup
-# shows PID (if running), last exit code, and label
+launchctl print gui/$(id -u)/com.darkcreation.album-ranker-backup
 ```
 
 **View the log** (stdout + stderr go to the same file):
@@ -179,21 +186,21 @@ tail -50 /Users/darkcreation/Documents/git_repos/album-ranker/.data/backup.log
 **Run the job immediately** (without waiting for 03:00):
 
 ```bash
-launchctl start com.darkcreation.album-ranker-backup
+launchctl kickstart -k gui/$(id -u)/com.darkcreation.album-ranker-backup
 ```
 
 **Unload the job** (stops scheduling):
 
 ```bash
-launchctl unload ~/Documents/git_repos/album-ranker/launchd/com.darkcreation.album-ranker-backup.plist
+launchctl bootout gui/$(id -u)/com.darkcreation.album-ranker-backup
 ```
 
 **Change the backup directory or retention** — edit the plist `ProgramArguments`, then reload:
 
 ```bash
-launchctl unload launchd/com.darkcreation.album-ranker-backup.plist
-# edit launchd/com.darkcreation.album-ranker-backup.plist
-launchctl load   launchd/com.darkcreation.album-ranker-backup.plist
+launchctl bootout gui/$(id -u)/com.darkcreation.album-ranker-backup
+# edit ~/Library/LaunchAgents/com.darkcreation.album-ranker-backup.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.darkcreation.album-ranker-backup.plist
 ```
 
 ### Backup files location

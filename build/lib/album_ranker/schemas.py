@@ -25,6 +25,7 @@ class ArtistUpsert(BaseModel):
     description_source_url: str | None = None
     description_source_label: str | None = None
     external_url: str | None = None
+    origin: str | None = None
 
 
 class ArtistRecord(ArtistUpsert):
@@ -41,14 +42,21 @@ class AlbumUpsert(BaseModel):
     artist_description_source_url: str | None = None
     artist_description_source_label: str | None = None
     album_external_url: str | None = None
+    album_stream_url: str | None = None
+    album_type: str | None = None
     title: str
     release_year: int | None = Field(default=None, ge=1000, le=9999)
     genre: str | None = None
+    rating: int | None = Field(default=None, ge=1, le=10)
     duration_seconds: int | None = Field(default=None, ge=0)
     cover_image_path: str | None = None
     cover_source_url: str | None = None
     notes: str | None = None
     tracks: list[TrackUpsert] = Field(default_factory=list)
+
+
+class AlbumRatingPatch(BaseModel):
+    rating: int | None = Field(default=None, ge=1, le=10)
 
 
 class AlbumCardRecord(BaseModel):
@@ -58,10 +66,13 @@ class AlbumCardRecord(BaseModel):
     title: str
     release_year: int | None = None
     genre: str | None = None
+    rating: int | None = Field(default=None, ge=1, le=10)
     duration_seconds: int | None = None
     cover_image_path: str | None = None
     cover_source_url: str | None = None
     album_external_url: str | None = None
+    album_stream_url: str | None = None
+    album_type: str | None = None
     notes: str | None = None
     created_at: str
     updated_at: str
@@ -72,6 +83,7 @@ class AlbumDetailRecord(AlbumCardRecord):
     artist_description: str | None = None
     artist_description_source_url: str | None = None
     artist_description_source_label: str | None = None
+    artist_origin: str | None = None
     tracks: list[TrackRecord] = Field(default_factory=list)
 
 
@@ -84,6 +96,8 @@ class AlbumListUpsert(BaseModel):
     description: str | None = None
     year: int | None = Field(default=None, ge=1000, le=9999)
     genre_filter_hint: str | None = None
+    is_auto: bool = False
+    auto_limit: int | None = None
 
 
 class AlbumListRecord(AlbumListUpsert):
@@ -109,6 +123,14 @@ class AlbumListItemAddRequest(BaseModel):
 
 class ReorderListItemsRequest(BaseModel):
     item_ids: list[int] = Field(default_factory=list)
+
+
+class AutoListBestRatedRequest(BaseModel):
+    name: str
+    limit: int = Field(default=10, ge=1, le=500)
+    year: int | None = Field(default=None, ge=1000, le=9999)
+    genre: str | None = None
+    update_existing: bool = False
 
 
 class GenreUpsert(BaseModel):
@@ -156,6 +178,7 @@ class ArtistDraftData(BaseModel):
     description_source_url: str | None = None
     description_source_label: str | None = None
     external_url: str | None = None
+    origin: str | None = None
 
 
 class AlbumDraftData(BaseModel):
@@ -164,9 +187,12 @@ class AlbumDraftData(BaseModel):
     artist_description_source_url: str | None = None
     artist_description_source_label: str | None = None
     album_external_url: str | None = None
+    album_stream_url: str | None = None
+    album_type: str | None = None
     album_title: str
     release_year: int | None = None
     genre: str | None = None
+    rating: int | None = Field(default=None, ge=1, le=10)
     duration_seconds: int | None = None
     cover_source_url: str | None = None
     notes: str | None = None
@@ -260,9 +286,11 @@ class AlbumFormPayload(BaseModel):
     artist_description_source_url: str | None = None
     artist_description_source_label: str | None = None
     album_external_url: str | None = None
+    album_stream_url: str | None = None
     title: str
     release_year: int | None = Field(default=None, ge=1000, le=9999)
     genre: str | None = None
+    rating: int | None = Field(default=None, ge=1, le=10)
     duration: str | None = None
     cover_image_path: str | None = None
     cover_source_url: str | None = None
@@ -302,9 +330,11 @@ class AlbumFormPayload(BaseModel):
             artist_description_source_url=self.artist_description_source_url,
             artist_description_source_label=self.artist_description_source_label,
             album_external_url=self.album_external_url,
+            album_stream_url=self.album_stream_url,
             title=self.title,
             release_year=self.release_year,
             genre=self.genre,
+            rating=self.rating,
             duration_seconds=display_to_seconds(self.duration),
             cover_image_path=self.cover_image_path,
             cover_source_url=self.cover_source_url,

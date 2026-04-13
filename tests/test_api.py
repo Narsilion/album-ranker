@@ -191,9 +191,9 @@ def test_lists_page_supports_create_add_and_reorder(client) -> None:
     assert list_detail_page.status_code == 200
     assert f'href="/lists/{list_id}"' in lists_page.text
     assert "Add Album To List" not in lists_page.text
-    assert "Add Album To List" in list_detail_page.text
+    assert "Add Album To List" not in list_detail_page.text
     assert "Save Details" in list_detail_page.text
-    assert "Search and choose album" in list_detail_page.text
+    assert "Search albums" in lists_page.text
     assert "Save" in list_detail_page.text
     assert "Top 2026 Black Metal" in lists_page.text
     assert 'value="Band B - Record Two"' not in list_detail_page.text
@@ -635,12 +635,18 @@ def test_delete_artist_removes_existing_artist_and_albums(client) -> None:
     album_id = created.json()["id"]
     artist_id = client.get("/api/artists").json()[0]["id"]
 
+    # Cannot delete artist while albums exist
+    blocked = client.delete(f"/api/artists/{artist_id}")
+    assert blocked.status_code == 409
+    assert "album" in blocked.json()["detail"].lower()
+
+    # Delete the album first, then the artist
+    client.delete(f"/api/albums/{album_id}")
     deleted = client.delete(f"/api/artists/{artist_id}")
 
     assert deleted.status_code == 200
     assert deleted.json() == {"ok": True}
     assert client.get("/api/artists").json() == []
-    assert client.get(f"/api/albums/{album_id}").status_code == 404
 
 
 def test_delete_list_removes_existing_list(client) -> None:

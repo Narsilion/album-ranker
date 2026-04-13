@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -12,10 +12,12 @@ from album_ranker.importer import CoverDownloader, MetadataImporter, draft_to_js
 from album_ranker.openai_client import OpenAIClient
 from album_ranker.schemas import (
     AlbumDetailRecord,
+    AlbumRatingPatch,
     AlbumListItemAddRequest,
     AlbumListRecord,
     AlbumListUpsert,
     AlbumUpsert,
+    AutoListBestRatedRequest,
     GenreRecord,
     GenreUpsert,
     ArtistRecord,
@@ -137,7 +139,7 @@ def create_app(
 
     @app.get("/lists", response_class=HTMLResponse)
     async def lists_page() -> str:
-        return render_lists_page(build_settings(), db.list_lists(), db.list_albums())
+        return render_lists_page(build_settings(), db.list_lists(), db.list_albums(), db.list_genres())
 
     @app.get("/lists/{list_id}", response_class=HTMLResponse)
     async def list_detail_page(list_id: int) -> str:
@@ -208,6 +210,8 @@ def create_app(
             db.delete_artist(artist_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True}
 
     @app.get("/api/albums", response_model=list[dict])
@@ -231,6 +235,27 @@ def create_app(
             return db.update_album(album_id, _resolve_album_cover(payload, None, cover_downloader))
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.patch("/api/albums/{album_id}/rating", response_model=AlbumDetailRecord)
+    async def patch_album_rating(album_id: int, payload: AlbumRatingPatch) -> AlbumDetailRecord:
+        try:
+            return db.patch_album_rating(album_id, payload.rating)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/albums/{album_id}/cover", response_model=AlbumDetailRecord)
+    async def upload_album_cover(album_id: int, file: UploadFile) -> AlbumDetailRecord:
+        try:
+            db.get_album(album_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        suffix = Path(file.filename or "").suffix.lower() or ".jpg"
+        if suffix not in (".jpg", ".jpeg", ".png", ".webp"):
+            raise HTTPException(status_code=400, detail="Unsupported image type")
+        settings.cover_dir.mkdir(parents=True, exist_ok=True)
+        target = settings.cover_dir / f"album-{album_id}-cover{suffix}"
+        target.write_bytes(await file.read())
+        return db.patch_album_cover(album_id, str(target))
 
     @app.delete("/api/albums/{album_id}")
     async def delete_album(album_id: int) -> dict[str, bool]:
@@ -261,6 +286,8 @@ def create_app(
             return db.add_album_to_list(list_id, payload.album_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/lists/{list_id}/items/reorder", response_model=AlbumListRecord)
     async def reorder_list(list_id: int, payload: ReorderListItemsRequest) -> AlbumListRecord:
@@ -285,6 +312,13 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"ok": True}
+
+    @app.post("/api/auto-lists/best-rated", response_model=AlbumListRecord)
+    async def auto_list_best_rated(payload: AutoListBestRatedRequest) -> AlbumListRecord:
+        try:
+            return db.auto_list_best_rated(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/import/artist", response_model=ImportDraftResponse)
     async def import_artist(payload: ImportRequest) -> ImportDraftResponse:
@@ -323,7 +357,10 @@ def create_app(
         artist: ArtistRecord | None = None
         album: AlbumDetailRecord | None = None
         if payload.target_type == "artist":
-            artist = db.create_artist(ArtistUpsert.model_validate(payload.payload))
+            artist_payload = dict(payload.payload)
+            if "name" not in artist_payload and "artist_name" in artist_payload:
+                artist_payload["name"] = artist_payload.pop("artist_name")
+            artist = db.create_artist(ArtistUpsert.model_validate(artist_payload))
             updated = db.update_import_job(
                 draft_id,
                 payload=payload.payload,

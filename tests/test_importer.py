@@ -83,7 +83,8 @@ def test_best_effort_album_draft_parses_metal_archives_page(monkeypatch) -> None
     assert draft.cover_source_url == "https://www.metal-archives.com/images/1/3/9/6/1396086.jpg?1852"
     assert len(draft.tracks) == 2
     assert draft.tracks[0].title == "Against the Storm"
-    assert draft.notes == "Type: Full-length | Label: Target Records | Format: Digital | Version desc.: Bandcamp | Catalog ID: N/A"
+    assert draft.album_type == "Full-length"
+    assert draft.notes == "Label: Target Records | Format: Digital | Version desc.: Bandcamp | Catalog ID: N/A"
 
 
 def test_best_effort_artist_draft_extracts_description(monkeypatch) -> None:

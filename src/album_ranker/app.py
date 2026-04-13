@@ -210,6 +210,8 @@ def create_app(
             db.delete_artist(artist_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True}
 
     @app.get("/api/albums", response_model=list[dict])
@@ -284,6 +286,8 @@ def create_app(
             return db.add_album_to_list(list_id, payload.album_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/lists/{list_id}/items/reorder", response_model=AlbumListRecord)
     async def reorder_list(list_id: int, payload: ReorderListItemsRequest) -> AlbumListRecord:
@@ -353,7 +357,10 @@ def create_app(
         artist: ArtistRecord | None = None
         album: AlbumDetailRecord | None = None
         if payload.target_type == "artist":
-            artist = db.create_artist(ArtistUpsert.model_validate(payload.payload))
+            artist_payload = dict(payload.payload)
+            if "name" not in artist_payload and "artist_name" in artist_payload:
+                artist_payload["name"] = artist_payload.pop("artist_name")
+            artist = db.create_artist(ArtistUpsert.model_validate(artist_payload))
             updated = db.update_import_job(
                 draft_id,
                 payload=payload.payload,

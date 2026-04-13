@@ -43,6 +43,7 @@ class AlbumUpsert(BaseModel):
     artist_description_source_label: str | None = None
     album_external_url: str | None = None
     album_stream_url: str | None = None
+    album_type: str | None = None
     title: str
     release_year: int | None = Field(default=None, ge=1000, le=9999)
     genre: str | None = None
@@ -71,6 +72,7 @@ class AlbumCardRecord(BaseModel):
     cover_source_url: str | None = None
     album_external_url: str | None = None
     album_stream_url: str | None = None
+    album_type: str | None = None
     notes: str | None = None
     created_at: str
     updated_at: str
@@ -81,6 +83,7 @@ class AlbumDetailRecord(AlbumCardRecord):
     artist_description: str | None = None
     artist_description_source_url: str | None = None
     artist_description_source_label: str | None = None
+    artist_origin: str | None = None
     tracks: list[TrackRecord] = Field(default_factory=list)
 
 
@@ -93,6 +96,8 @@ class AlbumListUpsert(BaseModel):
     description: str | None = None
     year: int | None = Field(default=None, ge=1000, le=9999)
     genre_filter_hint: str | None = None
+    is_auto: bool = False
+    auto_limit: int | None = None
 
 
 class AlbumListRecord(AlbumListUpsert):
@@ -183,6 +188,7 @@ class AlbumDraftData(BaseModel):
     artist_description_source_label: str | None = None
     album_external_url: str | None = None
     album_stream_url: str | None = None
+    album_type: str | None = None
     album_title: str
     release_year: int | None = None
     genre: str | None = None

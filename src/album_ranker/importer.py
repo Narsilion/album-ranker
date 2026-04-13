@@ -27,6 +27,7 @@ def _strip_html(html: str) -> str:
     text = re.sub(r"(?is)<script.*?>.*?</script>", " ", html)
     text = re.sub(r"(?is)<style.*?>.*?</style>", " ", text)
     text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = _html_unescape(text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -57,7 +58,20 @@ def _fetch_with_curl(url: str) -> tuple[str, str]:
     return result.stdout[:40000], "text/html"
 
 
+def _fetch_with_curl_ua(url: str, user_agent: str) -> tuple[str, str]:
+    result = subprocess.run(
+        ["curl", "-L", "-sS", "-A", user_agent, "--max-time", "30", url],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout[:40000], "text/html"
+
+
 def _fetch_url_document(url: str) -> tuple[str, str]:
+    # Facebook blocks generic crawlers but serves OG metadata to its own externalhit UA
+    if "facebook.com/" in url:
+        return _fetch_with_curl_ua(url, "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)")
     try:
         return _fetch_with_urllib(url)
     except (HTTPError, URLError, TimeoutError, ValueError):
@@ -197,19 +211,21 @@ def _metal_archives_album_draft(request: ImportRequest, html: str, metadata: dic
     release_year = int(year_match.group(0)) if year_match else None
     tracks, total_seconds = _extract_metal_archives_tracks(html)
     cover_url = _extract_metal_archives_cover(html) or metadata.get("image")
+    album_type = details.get("Type") or None
     notes_parts = [
         f"{label}: {details[label]}"
-        for label in ["Type", "Label", "Format", "Version desc.", "Catalog ID"]
+        for label in ["Label", "Format", "Version desc.", "Catalog ID"]
         if details.get(label)
     ]
     return AlbumDraftData(
         artist_name=artist_name,
-        artist_description=metadata.get("description"),
+        artist_description=None,
         artist_description_source_url=request.source_url,
         artist_description_source_label=metadata.get("source_label"),
         album_external_url=request.source_url,
         album_title=title,
         release_year=release_year,
+        album_type=album_type,
         duration_seconds=total_seconds,
         cover_source_url=cover_url,
         notes=" | ".join(notes_parts) or metadata.get("title") or None,
@@ -403,6 +419,232 @@ def _wikipedia_album_draft(request: ImportRequest, html: str, metadata: dict[str
     )
 
 
+def _parse_yt_duration(s: str) -> int | None:
+    """Parse YouTube duration strings.
+
+    YouTube playlist pages use a dot separator (e.g. ``4.10`` for 4m10s)
+    instead of the colon used elsewhere.  Colon-separated values (``4:10``,
+    ``1:04:10``) are handled by the normal ``display_to_seconds`` helper.
+    """
+    s = s.strip()
+    if not s:
+        return None
+    # M.SS dot format: digits, dot, exactly two digits
+    dot_m = re.match(r"^(\d+)\.(\d{2})$", s)
+    if dot_m:
+        secs = int(dot_m.group(2))
+        if secs >= 60:
+            return None
+        return int(dot_m.group(1)) * 60 + secs
+    # Fall back to standard M:SS or H:MM:SS
+    try:
+        return display_to_seconds(s)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _find_all_by_key(obj: Any, key: str) -> list[Any]:
+    """Recursively collect every value in *obj* whose dict key equals *key*."""
+    results: list[Any] = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k == key:
+                results.append(v)
+            else:
+                results.extend(_find_all_by_key(v, key))
+    elif isinstance(obj, list):
+        for item in obj:
+            results.extend(_find_all_by_key(item, key))
+    return results
+
+
+def _fetch_ytm_full_page(url: str) -> str:
+    """Return the full HTML of a music.youtube.com page without size truncation.
+
+    Uses ``Accept-Language: en-US`` so that text fields (subtitle, title) come
+    back in English rather than the browser's locale.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "curl", "-L", "-sS",
+                "-A", DEFAULT_HEADERS["User-Agent"],
+                "-H", "Accept-Language: en-US,en;q=0.9",
+                "--max-time", "30",
+                url,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout
+    except Exception:
+        return ""
+
+
+def _decode_ytm_initial_data_objects(raw: str) -> list[dict[str, Any]]:
+    """Decode hex-escaped ``data: '...'`` payloads from a YTM page.
+
+    YouTube Music stores page data in ``initialData.push({..., data: '\\x7b...'})``
+    blocks.  The ``params`` argument of the push call can contain commas, so
+    matching the full push expression reliably is fragile.  Instead we match
+    only the ``data: '...'`` portion which is stable.
+    """
+    objects: list[dict[str, Any]] = []
+    for m in re.finditer(r"data:\s*'((?:[^'\\]|\\.)*)'", raw):
+        encoded = m.group(1)
+        try:
+            decoded = re.sub(r"\\x([0-9a-fA-F]{2})", lambda x: chr(int(x.group(1), 16)), encoded)
+            decoded = decoded.replace("\\/", "/")
+            objects.append(json.loads(decoded))
+        except (ValueError, json.JSONDecodeError):
+            pass
+    return objects
+
+
+def _runs_text(runs_obj: Any) -> str:
+    """Join ``runs[*].text`` from a YTM text object into a single string."""
+    if isinstance(runs_obj, dict):
+        parts = runs_obj.get("runs") or []
+        if parts:
+            return "".join(str(r.get("text") or "") for r in parts if isinstance(r, dict))
+        return str(runs_obj.get("simpleText") or "")
+    return ""
+
+
+def _extract_ytm_year(raw: str) -> int | None:
+    """Extract the release year from the ``subtitle`` field of a YTM album page.
+
+    The subtitle renderer produces ``["Album", " • ", "2026"]`` (three runs).
+    This is inside one of the hex-escaped ``initialData.push()`` blocks.
+    """
+    for obj in _decode_ytm_initial_data_objects(raw):
+        for subtitle in _find_all_by_key(obj, "subtitle"):
+            if not isinstance(subtitle, dict):
+                continue
+            runs = subtitle.get("runs") or []
+            # We want exactly 3 runs: ["Album", " • ", "<year>"]
+            if len(runs) == 3:
+                year_text = str(runs[2].get("text") or "").strip()
+                if re.match(r"^(19|20)\d{2}$", year_text):
+                    return int(year_text)
+    return None
+
+
+def _fetch_yt_playlist_raw(playlist_id: str) -> str:
+    """Return the full HTML of a YouTube playlist page without size truncation."""
+    url = f"https://www.youtube.com/playlist?list={playlist_id}"
+    try:
+        result = subprocess.run(
+            ["curl", "-L", "-sS", "-A", DEFAULT_HEADERS["User-Agent"], "--max-time", "30", url],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout
+    except Exception:
+        return ""
+
+
+def _extract_yt_playlist_tracks(playlist_id: str) -> list[dict[str, Any]]:
+    """Fetch www.youtube.com/playlist and parse tracks from ytInitialData."""
+    raw = _fetch_yt_playlist_raw(playlist_id)
+    if not raw:
+        return []
+    # Extract the ytInitialData JSON blob (page is ~800KB; data starts well past 600KB)
+    m = re.search(r"ytInitialData\s*=\s*(\{.+?\});\s*(?:var |</script>|window\.)", raw, re.DOTALL)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(1))
+    except (json.JSONDecodeError, ValueError):
+        return []
+    renderers = _find_all_by_key(data, "playlistVideoRenderer")
+    tracks: list[dict[str, Any]] = []
+    for renderer in renderers:
+        if not isinstance(renderer, dict):
+            continue
+        # Title from runs list
+        title_runs = _find_all_by_key(renderer.get("title") or {}, "text")
+        title = "".join(str(r) for r in title_runs).strip()
+        if not title:
+            continue
+        # Duration from lengthText.simpleText (format "M.SS")
+        length_text = renderer.get("lengthText") or {}
+        duration_raw = str(length_text.get("simpleText") or "").strip()
+        duration_sec = _parse_yt_duration(duration_raw) if duration_raw else None
+        # Index / position — YouTube uses 1-based index in this field
+        idx = renderer.get("index") or {}
+        position_raw = str(idx.get("simpleText") or "").strip()
+        position = int(position_raw) if position_raw.isdigit() else len(tracks) + 1
+        tracks.append({"track_number": position, "title": title, "duration_seconds": duration_sec})
+    return tracks
+
+
+def _youtube_music_album_draft(request: ImportRequest, html: str, metadata: dict[str, Any]) -> AlbumDraftData:
+    """Build an AlbumDraftData from a YouTube Music playlist URL."""
+    # Extract playlist ID from the original source URL
+    pid_m = re.search(r"[?&]list=([A-Za-z0-9_-]+)", request.source_url)
+    playlist_id = pid_m.group(1) if pid_m else ""
+
+    # Fetch the full YTM page (Accept-Language: en-US) to get year from initialData.
+    # _page_metadata() truncates to 40KB which misses the initialData blocks.
+    ytm_raw = _fetch_ytm_full_page(request.source_url)
+
+    # og:title from music.youtube.com is English and follows "X - Album by Y"
+    og_title = str(metadata.get("title") or "")
+    album_title = request.album_title or ""
+    artist_name = request.artist_name or ""
+
+    if og_title:
+        # e.g. "Burn The Ships - Album by American Adrenalin"
+        by_m = re.search(r"(.+?)\s*-\s*(?:Album\s+by|EP\s+by|Single\s+by)\s+(.+)", og_title, re.IGNORECASE)
+        if by_m:
+            if not album_title:
+                album_title = by_m.group(1).strip()
+            if not artist_name:
+                artist_name = by_m.group(2).strip()
+        else:
+            # Fallback: everything before " – " or " - " is the album title
+            for sep in (" \u2013 ", " - "):
+                if sep in og_title:
+                    parts = og_title.split(sep, 1)
+                    if not album_title:
+                        album_title = parts[-1].strip()
+                    break
+            if not album_title:
+                album_title = og_title.strip()
+
+    # Cover: og:image from the music.youtube.com fetch is reliable
+    cover_url = metadata.get("image")
+
+    # Release year from the subtitle initialData field ("Album • 2026")
+    release_year = _extract_ytm_year(ytm_raw) if ytm_raw else None
+
+    # Tracks from the regular YouTube playlist page
+    tracks: list[dict[str, Any]] = []
+    if playlist_id:
+        tracks = _extract_yt_playlist_tracks(playlist_id)
+
+    # Total duration: sum known track durations
+    known_secs = [t["duration_seconds"] for t in tracks if t.get("duration_seconds") is not None]
+    total_seconds = sum(known_secs) if known_secs else None
+
+    return AlbumDraftData(
+        artist_name=artist_name or request.artist_name,
+        artist_description=None,
+        artist_description_source_url=request.source_url,
+        artist_description_source_label=metadata.get("source_label"),
+        album_external_url=request.source_url,
+        album_stream_url=request.source_url,
+        album_title=album_title,
+        release_year=release_year,
+        duration_seconds=total_seconds,
+        cover_source_url=cover_url,
+        tracks=tracks,
+    )
+
+
 def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
     metadata = _page_metadata(request.source_url)
     artist_name = request.artist_name.strip()
@@ -422,10 +664,45 @@ def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
     )
 
 
+_STREAMING_HOSTS = {"music.youtube.com", "open.spotify.com", "spotify.com"}
+
+_ALBUM_TYPE_MAP: dict[str, str] = {
+    "album": "Full-length",
+    "full length": "Full-length",
+    "full-length": "Full-length",
+    "full length album": "Full-length",
+    "lp": "Full-length",
+    "ep": "EP",
+    "e.p.": "EP",
+    "single": "Single",
+    "demo": "Demo",
+    "live": "Live album",
+    "live album": "Live album",
+    "compilation": "Compilation",
+    "split": "Split",
+    "video": "Video",
+}
+
+
+def _normalize_album_type(value: str | None) -> str | None:
+    if not value:
+        return value
+    return _ALBUM_TYPE_MAP.get(value.strip().lower(), value)
+
+
+def _is_streaming_url(url: str | None) -> bool:
+    if not url:
+        return False
+    host = _host_label(url) or ""
+    return any(h in host for h in _STREAMING_HOSTS)
+
+
 def _best_effort_album_draft(request: ImportRequest) -> AlbumDraftData:
     metadata = _page_metadata(request.source_url)
     html = str(metadata.get("html") or "")
     source_label = str(metadata.get("source_label") or "")
+    if "music.youtube.com" in source_label:
+        return _youtube_music_album_draft(request, html, metadata)
     if "metal-archives.com" in source_label and html:
         return _metal_archives_album_draft(request, html, metadata)
     if "bandcamp.com" in source_label and html:
@@ -436,12 +713,14 @@ def _best_effort_album_draft(request: ImportRequest) -> AlbumDraftData:
     album_title = request.album_title or ""
     if not album_title and page_title:
         album_title = page_title.split(" - ")[0].strip()
+    stream_url = request.source_url if _is_streaming_url(request.source_url) else None
     return AlbumDraftData(
         artist_name=request.artist_name,
         artist_description=metadata.get("description"),
         artist_description_source_url=request.source_url,
         artist_description_source_label=metadata.get("source_label"),
         album_external_url=request.source_url,
+        album_stream_url=stream_url,
         album_title=album_title,
         cover_source_url=metadata.get("image"),
         notes=page_title or None,
@@ -456,10 +735,21 @@ def infer_cover_source_url_from_album_url(album_url: str | None) -> str | None:
     return _normalize_cover_source_url(draft.cover_source_url, album_url)
 
 
+_IMAGE_CDN_HOSTS = {
+    "lh3.googleusercontent.com",
+    "i.ytimg.com",
+    "i9.ytimg.com",
+    "img.youtube.com",
+}
+
+
 def _looks_like_image_url(url: str | None) -> bool:
     if not url:
         return False
     parsed = urlparse(url)
+    # Known image CDN hosts serve images even without a file extension
+    if parsed.netloc in _IMAGE_CDN_HOSTS:
+        return True
     path = parsed.path.lower()
     return any(path.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".gif"])
 
@@ -493,10 +783,12 @@ def _merge_album_drafts(ai_data: dict[str, Any], fallback: AlbumDraftData, reque
         or _host_label(request.source_url)
     )
     merged["album_external_url"] = merged.get("album_external_url") or fallback.album_external_url or request.source_url
+    merged["album_stream_url"] = fallback.album_stream_url or merged.get("album_stream_url")
     merged["release_year"] = merged.get("release_year") or fallback.release_year
     merged["genre"] = merged.get("genre") or fallback.genre
     merged["duration_seconds"] = merged.get("duration_seconds") or fallback.duration_seconds
-    merged["notes"] = merged.get("notes") or fallback.notes
+    merged["album_type"] = _normalize_album_type(fallback.album_type or merged.get("album_type"))
+    merged["notes"] = fallback.notes or merged.get("notes")
     merged["tracks"] = merged.get("tracks") or [track.model_dump(mode="json") for track in fallback.tracks]
     merged["cover_source_url"] = (
         _normalize_cover_source_url(merged.get("cover_source_url"), request.source_url)
@@ -524,8 +816,8 @@ class MetadataImporter:
         self.last_error = detail
 
     def create_artist_draft(self, request: ImportRequest, *, model: str) -> ArtistDraftData:
-        context = self._build_context(request.source_url)
         source_metadata = _page_metadata(request.source_url)
+        context = self._build_context(request.source_url, metadata=source_metadata)
         if self.client is None:
             draft = _best_effort_artist_draft(request)
             self._set_diagnostics(
@@ -566,7 +858,7 @@ class MetadataImporter:
         prompt = (
             f"Create a concise artist metadata draft for '{request.artist_name or 'the artist on the source page'}'. "
             "Prefer factual content. If data is uncertain, return null rather than inventing it. "
-            "For 'origin', provide the city and country (or just country) where the artist is from, e.g. 'London, UK' or 'Nashville, USA'. "
+            "For 'origin', provide the country first, then city or region if known, e.g. 'UK, London' or 'USA, Nashville'. "
             f"Preferred source URL: {request.source_url or 'none provided'}.\n\n"
             f"Reference context:\n{context}"
         )
@@ -619,8 +911,8 @@ class MetadataImporter:
         return draft
 
     def create_album_draft(self, request: ImportRequest, *, model: str) -> AlbumDraftData:
-        context = self._build_context(request.source_url)
         source_metadata = _page_metadata(request.source_url)
+        context = self._build_context(request.source_url, metadata=source_metadata)
         fallback_draft = _best_effort_album_draft(request)
         if self.client is None:
             draft = fallback_draft
@@ -653,6 +945,7 @@ class MetadataImporter:
                 "genre": {"type": ["string", "null"]},
                 "duration_seconds": {"type": ["integer", "null"]},
                 "cover_source_url": {"type": ["string", "null"]},
+                "album_type": {"type": ["string", "null"]},
                 "notes": {"type": ["string", "null"]},
                 "tracks": {
                     "type": "array",
@@ -679,6 +972,7 @@ class MetadataImporter:
                 "genre",
                 "duration_seconds",
                 "cover_source_url",
+                "album_type",
                 "notes",
                 "tracks",
             ],
@@ -686,7 +980,8 @@ class MetadataImporter:
         prompt = (
             f"Create an album metadata draft for artist '{request.artist_name}' and album '{request.album_title or ''}'. "
             "Return only confident factual data. Use null for unknown fields. "
-            f"Preferred source URL: {request.source_url or 'none provided'}.\n\n"
+            f"Preferred source URL: {request.source_url or 'none provided'}.\n"
+            "For album_type use Metal Archives naming: 'Full-length', 'EP', 'Single', 'Demo', 'Live album', 'Compilation', 'Split', 'Video'.\n\n"
             f"Reference context:\n{context}"
         )
         try:
@@ -734,15 +1029,24 @@ class MetadataImporter:
         )
         return draft
 
-    def _build_context(self, source_url: str | None) -> str:
+    def _build_context(self, source_url: str | None, metadata: dict[str, Any] | None = None) -> str:
         if not source_url:
             return "No explicit source URL supplied. Use best-effort world knowledge only."
-        try:
-            excerpt = _fetch_url_excerpt(source_url)
-        except (HTTPError, URLError, TimeoutError, ValueError, subprocess.CalledProcessError):
-            excerpt = ""
+        if metadata is None:
+            try:
+                metadata = _page_metadata(source_url)
+            except Exception:
+                metadata = {}
         host = _host_label(source_url) or source_url
-        return f"Source host: {host}\nSource URL: {source_url}\nExcerpt: {excerpt}"
+        parts = [f"Source host: {host}", f"Source URL: {source_url}"]
+        if metadata.get("title"):
+            parts.append(f"Page title: {metadata['title']}")
+        if metadata.get("description"):
+            parts.append(f"Page description: {metadata['description']}")
+        excerpt = metadata.get("excerpt") or ""
+        if excerpt:
+            parts.append(f"Page text excerpt:\n{excerpt}")
+        return "\n".join(parts)
 
     def _diagnostic_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
         if not metadata:

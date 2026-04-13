@@ -14,6 +14,7 @@ def test_database_initializes_and_reorders_list_items(settings) -> None:
             title="Till Life Do Us Part",
             release_year=2026,
             genre="Black Metal",
+            rating=9,
             duration_seconds=1800,
             tracks=[],
         )
@@ -43,3 +44,4 @@ def test_database_initializes_and_reorders_list_items(settings) -> None:
 
     assert [item.album.title for item in reordered.items] == ["Another Night", "Till Life Do Us Part"]
     assert [item.rank_position for item in reordered.items] == [1, 2]
+    assert db.get_album(first.id).rating == 9

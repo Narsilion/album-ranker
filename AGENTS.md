@@ -24,6 +24,8 @@ Use this file to avoid re-discovering the project structure on every task.
   source .venv/bin/activate
   python -m pip install .
   ```
+- Daily DB backup command: `album-ranker-backup`
+- Daily backup `launchd` template: `launchd/com.darkcreation.album-ranker-backup.plist`
 - Generated code under `build/lib/album_ranker/` should not be edited.
 
 ## Current Page Model
