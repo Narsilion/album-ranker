@@ -122,6 +122,90 @@ source .venv/bin/activate
 pytest
 ```
 
+## Daily Backup
+
+The repo includes a backup command and a macOS `launchd` job definition.
+
+### Manual backup
+
+```bash
+cd /Users/darkcreation/Documents/git_repos/album-ranker
+source .venv/bin/activate
+album-ranker-backup
+```
+
+By default this writes to `.data/backups/` inside the project.
+
+### Backup to iCloud Drive
+
+Pass `--backup-dir` to write directly into iCloud:
+
+```bash
+album-ranker-backup \
+  --backup-dir "$HOME/Library/Mobile Documents/com~apple~CloudDocs/album-ranker-backups" \
+  --retention-days 30
+```
+
+Backups are dated SQLite files, e.g. `album-ranker-2026-04-13.db`.  
+iCloud syncs them automatically — open them in any SQLite viewer on any signed-in device.
+
+### Scheduled backup (launchd)
+
+The included plist runs daily at 03:00 and writes to iCloud:
+
+```text
+launchd/com.darkcreation.album-ranker-backup.plist
+```
+
+**Load the job** (run once after cloning or after editing the plist):
+
+```bash
+launchctl load ~/Documents/git_repos/album-ranker/launchd/com.darkcreation.album-ranker-backup.plist
+```
+
+**Check status:**
+
+```bash
+launchctl list | grep album-ranker-backup
+# shows PID (if running), last exit code, and label
+```
+
+**View the log** (stdout + stderr go to the same file):
+
+```bash
+tail -50 /Users/darkcreation/Documents/git_repos/album-ranker/.data/backup.log
+```
+
+**Run the job immediately** (without waiting for 03:00):
+
+```bash
+launchctl start com.darkcreation.album-ranker-backup
+```
+
+**Unload the job** (stops scheduling):
+
+```bash
+launchctl unload ~/Documents/git_repos/album-ranker/launchd/com.darkcreation.album-ranker-backup.plist
+```
+
+**Change the backup directory or retention** — edit the plist `ProgramArguments`, then reload:
+
+```bash
+launchctl unload launchd/com.darkcreation.album-ranker-backup.plist
+# edit launchd/com.darkcreation.album-ranker-backup.plist
+launchctl load   launchd/com.darkcreation.album-ranker-backup.plist
+```
+
+### Backup files location
+
+| Location | Path |
+|---|---|
+| Default local | `.data/backups/album-ranker-YYYY-MM-DD.db` |
+| iCloud (plist default) | `~/Library/Mobile Documents/com~apple~CloudDocs/album-ranker-backups/` |
+| Log | `.data/backup.log` |
+
+Each backup is a complete, standalone SQLite file — open it directly with any SQLite browser to inspect or restore data.
+
 ## Current Implementation Notes
 
 - album import is scoped to the dedicated artist page, not the shared artists index

@@ -16,6 +16,7 @@ def test_manual_album_create_and_render_pages(client) -> None:
             "title": "Till Life Do Us Part - EP",
             "release_year": 2026,
             "genre": "Black Metal",
+            "rating": 8,
             "duration_seconds": 2540,
             "cover_image_path": None,
             "cover_source_url": None,
@@ -44,11 +45,13 @@ def test_manual_album_create_and_render_pages(client) -> None:
     assert "Till Life Do Us Part - EP" in albums_page.text
     assert "Scythe of Mephisto • 2026" in albums_page.text
     assert "Black Metal" in albums_page.text
+    assert "8/10" in albums_page.text
     assert details_page.status_code == 200
     assert "Tracklist" in details_page.text
     assert "Night Procession" in details_page.text
     assert "Album Description" in details_page.text
     assert "Debut EP" in details_page.text
+    assert "8/10" in details_page.text
     assert f'href="/artists/{artist_id}"' in details_page.text
     assert artists_page.status_code == 200
     assert genres_page.status_code == 200
@@ -63,6 +66,7 @@ def test_manual_album_create_and_render_pages(client) -> None:
     assert "Album Import" not in albums_page.text
     assert "Album Import" not in artists_page.text
     assert f'href="/albums/{album_id}"' in artist_detail_page.text
+    assert "artistAlbumImportForm.addEventListener" not in artists_page.text
 
 
 def test_genres_page_supports_manual_create_and_delete(client) -> None:
@@ -293,6 +297,122 @@ def test_settings_page_updates_active_model(client) -> None:
     assert settings_page.status_code == 200
     assert "gpt-5.4-mini" in settings_page.text
 
+
+def test_patch_album_rating(client) -> None:
+    album = client.post(
+        "/api/albums",
+        json={
+            "artist_name": "Vanir",
+            "title": "Wyrd",
+            "release_year": 2026,
+            "genre": "Folk Metal",
+            "duration_seconds": 2725,
+            "cover_image_path": None,
+            "cover_source_url": None,
+            "notes": None,
+            "tracks": [],
+        },
+    ).json()
+    album_id = album["id"]
+
+    patched = client.patch(f"/api/albums/{album_id}/rating", json={"rating": 9})
+    assert patched.status_code == 200
+    assert patched.json()["rating"] == 9
+
+    cleared = client.patch(f"/api/albums/{album_id}/rating", json={"rating": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["rating"] is None
+
+
+def test_upload_album_cover(client, tmp_path) -> None:
+    album = client.post(
+        "/api/albums",
+        json={
+            "artist_name": "Scythe of Mephisto",
+            "title": "Primeval Rites",
+            "release_year": 2026,
+            "genre": "Black Metal",
+            "duration_seconds": 1800,
+            "cover_image_path": None,
+            "cover_source_url": None,
+            "notes": None,
+            "tracks": [],
+        },
+    ).json()
+    album_id = album["id"]
+
+    fake_image = b"\xff\xd8\xff\xe0fake-jpeg-content"
+    response = client.post(
+        f"/api/albums/{album_id}/cover",
+        files={"file": ("cover.jpg", fake_image, "image/jpeg")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["cover_image_path"] is not None
+    assert data["cover_image_path"].endswith(".jpg")
+
+
+def test_upload_album_cover_rejects_unsupported_type(client) -> None:
+    album = client.post(
+        "/api/albums",
+        json={
+            "artist_name": "Band X",
+            "title": "Demo",
+            "release_year": 2026,
+            "genre": "Black Metal",
+            "duration_seconds": 600,
+            "cover_image_path": None,
+            "cover_source_url": None,
+            "notes": None,
+            "tracks": [],
+        },
+    ).json()
+
+    response = client.post(
+        f"/api/albums/{album['id']}/cover",
+        files={"file": ("cover.gif", b"GIF89a", "image/gif")},
+    )
+
+    assert response.status_code == 400
+
+
+def test_artist_origin_is_stored_and_returned(client) -> None:
+    response = client.post(
+        "/api/artists",
+        json={
+            "name": "Mumford & Sons",
+            "description": "British folk rock band.",
+            "description_source_url": "https://en.wikipedia.org/wiki/Mumford_%26_Sons",
+            "description_source_label": "Wikipedia",
+            "external_url": "https://mumfordandsons.com",
+            "origin": "London, UK",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["origin"] == "London, UK"
+
+    fetched = next(a for a in client.get("/api/artists").json() if a["id"] == data["id"])
+    assert fetched["origin"] == "London, UK"
+
+    updated = client.put(
+        f"/api/artists/{data['id']}",
+        json={
+            "name": "Mumford & Sons",
+            "description": "British folk rock band.",
+            "description_source_url": None,
+            "description_source_label": None,
+            "external_url": None,
+            "origin": "London, England",
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["origin"] == "London, England"
+
+    artist_detail_page = client.get(f"/artists/{data['id']}")
+    assert "London, England" in artist_detail_page.text
 
 def test_confirm_artist_import_updates_existing_artist_instead_of_crashing(client) -> None:
     existing = client.post(
