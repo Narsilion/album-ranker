@@ -145,6 +145,9 @@ class Database:
                 connection.execute("ALTER TABLE albums ADD COLUMN album_stream_url TEXT")
             if "rating" not in album_columns:
                 connection.execute("ALTER TABLE albums ADD COLUMN rating INTEGER")
+            artist_columns = {row["name"] for row in connection.execute("PRAGMA table_info(artists)").fetchall()}
+            if "origin" not in artist_columns:
+                connection.execute("ALTER TABLE artists ADD COLUMN origin TEXT")
 
     @contextmanager
     def connection(self) -> sqlite3.Connection:
@@ -310,6 +313,7 @@ class Database:
                 description_source_url=payload.description_source_url or existing.description_source_url,
                 description_source_label=payload.description_source_label or existing.description_source_label,
                 external_url=payload.external_url or existing.external_url,
+                origin=payload.origin or existing.origin,
             )
             return self.update_artist(existing.id, merged)
         slug = self._unique_slug(slugify(payload.name))
@@ -319,8 +323,8 @@ class Database:
                 """
                 INSERT INTO artists(
                     name, slug, description, description_source_url, description_source_label,
-                    external_url, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    external_url, origin, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload.name,
@@ -329,6 +333,7 @@ class Database:
                     payload.description_source_url,
                     payload.description_source_label,
                     payload.external_url,
+                    payload.origin,
                     now,
                     now,
                 ),
@@ -344,7 +349,7 @@ class Database:
                 """
                 UPDATE artists
                 SET name = ?, slug = ?, description = ?, description_source_url = ?,
-                    description_source_label = ?, external_url = ?, updated_at = ?
+                    description_source_label = ?, external_url = ?, origin = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -354,6 +359,7 @@ class Database:
                     payload.description_source_url,
                     payload.description_source_label,
                     payload.external_url,
+                    payload.origin,
                     utc_now_iso(),
                     artist_id,
                 ),
@@ -824,8 +830,8 @@ class Database:
                 """
                 INSERT INTO artists(
                     name, slug, description, description_source_url, description_source_label,
-                    external_url, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    external_url, origin, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload.artist_name,
@@ -833,6 +839,7 @@ class Database:
                     payload.artist_description,
                     payload.artist_description_source_url,
                     payload.artist_description_source_label,
+                    None,
                     None,
                     now,
                     now,

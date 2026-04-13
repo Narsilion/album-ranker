@@ -769,7 +769,7 @@ def render_artists_page(
     body = f"""
       <section class="hero">
         <div class="eyebrow">Artists</div>
-        <h1>Build a library around artists, not just files.</h1>
+        <h1>Build a library around artists</h1>
         <p>Keep the band description, source link, and album catalog together. Import when it helps, edit everything when it does not.</p>
       </section>
       <section class="panel" style="margin-top:20px;">
@@ -797,6 +797,10 @@ def render_artists_page(
               <div class="form-field">
                 <label class="form-label" for="artistConfirmName">Artist Name</label>
                 <input id="artistConfirmName" name="name" placeholder="Artist name" required>
+              </div>
+              <div class="form-field">
+                <label class="form-label" for="artistConfirmOrigin">Origin</label>
+                <input id="artistConfirmOrigin" name="origin" placeholder="e.g. London, UK">
               </div>
               <div class="form-field">
                 <label class="form-label" for="artistConfirmDescription">Description</label>
@@ -830,6 +834,10 @@ def render_artists_page(
             <div class="form-field">
               <label class="form-label" for="artistFormName">Artist Name</label>
               <input id="artistFormName" name="name" placeholder="Artist name" required>
+            </div>
+            <div class="form-field">
+              <label class="form-label" for="artistFormOrigin">Origin</label>
+              <input id="artistFormOrigin" name="origin" placeholder="e.g. London, UK">
             </div>
             <div class="form-field">
               <label class="form-label" for="artistFormDescription">Description</label>
@@ -877,6 +885,7 @@ def render_artists_page(
           artistForm.description_source_url.value = data.description_source_url || "";
           artistForm.description_source_label.value = data.description_source_label || "";
           artistForm.external_url.value = data.external_url || "";
+          artistForm.origin.value = data.origin || "";
         }}
         function fillArtistImportDraft(draft) {{
           artistToolsPanel.classList.remove("hidden");
@@ -888,6 +897,7 @@ def render_artists_page(
           artistConfirmForm.description_source_url.value = draft.draft_payload.description_source_url || draft.chosen_source_url || "";
           artistConfirmForm.description_source_label.value = draft.draft_payload.description_source_label || "";
           artistConfirmForm.external_url.value = draft.draft_payload.external_url || "";
+          artistConfirmForm.origin.value = draft.draft_payload.origin || "";
         }}
         document.querySelectorAll(".edit-artist").forEach((button) => {{
           button.addEventListener("click", () => fillArtistForm(JSON.parse(button.dataset.artist)));
@@ -923,6 +933,7 @@ def render_artists_page(
             description_source_url: artistForm.description_source_url.value.trim() || null,
             description_source_label: artistForm.description_source_label.value.trim() || null,
             external_url: artistForm.external_url.value.trim() || null,
+            origin: artistForm.origin.value.trim() || null,
           }};
           const artistId = artistForm.artist_id.value.trim();
           await fetchJson(artistId ? `/api/artists/${{artistId}}` : "/api/artists", {{
@@ -958,6 +969,7 @@ def render_artists_page(
                 description_source_url: artistConfirmForm.description_source_url.value.trim() || null,
                 description_source_label: artistConfirmForm.description_source_label.value.trim() || null,
                 external_url: artistConfirmForm.external_url.value.trim() || null,
+                origin: artistConfirmForm.origin.value.trim() || null,
               }},
             }}),
           }});
@@ -1000,6 +1012,7 @@ def render_artist_detail_page(
         </div>
         <div id="{clamp_id}" class="clamp muted">{_escape(artist.description or 'No description yet.')}</div>
         <button type="button" class="toggle-link" data-toggle-clamp="{clamp_id}">MORE</button>
+        {f'<div class="meta-item" style="margin-top:10px;"><span class="meta-item-label">Origin</span>{_escape(artist.origin)}</div>' if artist.origin else ''}
       </section>
       <section class="panel" style="margin-top:20px;">
         <div class="detail-head">
@@ -1144,6 +1157,8 @@ def render_artist_detail_page(
           artistAlbumConfirmForm.artist_description.value = "{_escape(artist.description)}";
           artistAlbumConfirmForm.artist_description_source_url.value = "{_escape(artist.description_source_url)}";
           artistAlbumConfirmForm.artist_description_source_label.value = "{_escape(artist.description_source_label)}";
+          artistAlbumConfirmForm.artist_origin.value = "{_escape(artist.origin)}";
+          artistAlbumConfirmForm.artist_origin.value = "{_escape(artist.origin)}";
           artistAlbumImportStatus.textContent = "";
         }});
         artistAlbumConfirmForm.addEventListener("submit", async (event) => {{
@@ -1190,7 +1205,7 @@ def render_albums_page(
     body = f"""
       <section class="hero">
         <div class="eyebrow">Albums</div>
-        <h1>See the library as a wall of records.</h1>
+        <h1>See the library as a wall of records</h1>
         <p>Filter by genre, year, or artist, open any cover into the full album detail view, and add manual entries from here. AI album import now lives on the Artists page so the import stays tied to the artist you picked.</p>
       </section>
       <section class="panel" style="margin-top:20px;">
@@ -1560,7 +1575,7 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
     body = f"""
       <section class="hero">
         <div class="eyebrow">Lists</div>
-        <h1>Rank albums into actual tops.</h1>
+        <h1>Rank albums into actual tops</h1>
         <p>Create focused lists, add albums from your library, then drag or button them into the order that actually reflects preference.</p>
       </section>
       <section class="panel" style="margin-top:20px;">
@@ -1816,7 +1831,7 @@ def render_settings_page(settings: SettingsRecord) -> str:
     body = f"""
       <section class="hero">
         <div class="eyebrow">Settings</div>
-        <h1>Keep AI optional and visible.</h1>
+        <h1>Keep AI optional and visible</h1>
         <p>Choose the active OpenAI model used for draft generation. More settings can be added later without redesigning the page.</p>
       </section>
       <section class="grid two">
@@ -1874,7 +1889,7 @@ def render_genres_page(settings: SettingsRecord, genres: list[GenreRecord]) -> s
     body = f"""
       <section class="hero">
         <div class="eyebrow">Genres</div>
-        <h1>Manage the filter list manually.</h1>
+        <h1>Manage the filter list manually</h1>
         <p>Add only the genres you want to see in the album filter. Album matching uses substring checks, so a filter like Gothic Metal will still match Industrial / Gothic Metal.</p>
       </section>
       <section class="grid two">

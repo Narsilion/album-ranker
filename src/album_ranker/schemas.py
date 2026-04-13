@@ -25,6 +25,7 @@ class ArtistUpsert(BaseModel):
     description_source_url: str | None = None
     description_source_label: str | None = None
     external_url: str | None = None
+    origin: str | None = None
 
 
 class ArtistRecord(ArtistUpsert):
@@ -172,6 +173,7 @@ class ArtistDraftData(BaseModel):
     description_source_url: str | None = None
     description_source_label: str | None = None
     external_url: str | None = None
+    origin: str | None = None
 
 
 class AlbumDraftData(BaseModel):

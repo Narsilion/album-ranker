@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from html import unescape as _html_unescape
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -33,7 +34,7 @@ def _fetch_with_urllib(url: str) -> tuple[str, str]:
     request = Request(url, headers=DEFAULT_HEADERS)
     with urlopen(request, timeout=30) as response:
         content_type = response.headers.get("Content-Type", "")
-        raw = response.read(40000).decode("utf-8", errors="ignore")
+        raw = response.read(100000).decode("utf-8", errors="ignore")
     return raw, content_type
 
 
@@ -216,6 +217,192 @@ def _metal_archives_album_draft(request: ImportRequest, html: str, metadata: dic
     )
 
 
+def _parse_iso_duration(s: str) -> int | None:
+    """Convert ISO 8601 duration (e.g. PT3M33S) to seconds."""
+    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?$", s)
+    if not m:
+        return None
+    h = int(m.group(1) or 0)
+    mins = int(m.group(2) or 0)
+    secs = int(float(m.group(3) or 0))
+    return h * 3600 + mins * 60 + secs
+
+
+def _extract_bandcamp_ld_json(html: str) -> dict[str, Any] | None:
+    for m in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        try:
+            data = json.loads(m.group(1))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(data, dict) and data.get("@type") in ("MusicAlbum", "Album"):
+            return data
+    return None
+
+
+def _bandcamp_album_draft(request: ImportRequest, html: str, metadata: dict[str, Any]) -> AlbumDraftData:
+    ld = _extract_bandcamp_ld_json(html) or {}
+    # Tracks from ld+json ItemList
+    tracks: list[dict[str, Any]] = []
+    track_list = ld.get("track") or {}
+    items = track_list.get("itemListElement", []) if isinstance(track_list, dict) else []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        inner = item.get("item") or {}
+        name = str(inner.get("name") or "").strip()
+        position = item.get("position") or (len(tracks) + 1)
+        duration_raw = str(inner.get("duration") or "")
+        duration_sec = _parse_iso_duration(duration_raw) if duration_raw else None
+        if name:
+            tracks.append({"track_number": int(position), "title": name, "duration_seconds": duration_sec})
+    # Album title and artist from ld+json or page title
+    album_title = str(ld.get("name") or request.album_title or "").strip()
+    artist_name = request.artist_name
+    by_artist = ld.get("byArtist") or {}
+    if isinstance(by_artist, dict) and not artist_name:
+        artist_name = str(by_artist.get("name") or "").strip()
+    if not album_title:
+        page_title = str(metadata.get("title") or "")
+        for sep in (" | ", " by ", " - "):
+            if sep in page_title:
+                album_title = page_title.split(sep, 1)[0].strip()
+                if not artist_name:
+                    artist_name = page_title.split(sep, 1)[1].strip()
+                break
+    # Release year from datePublished or credits text
+    release_year: int | None = None
+    date_str = str(ld.get("datePublished") or "")
+    year_m = re.search(r"\b(19|20)\d{2}\b", date_str)
+    if year_m:
+        release_year = int(year_m.group(0))
+    if not release_year:
+        credits_m = re.search(r"released\s+\w+\s+\d+,\s+(\d{4})", _strip_html(html), re.IGNORECASE)
+        if credits_m:
+            release_year = int(credits_m.group(1))
+    # Cover image
+    album_image = ld.get("image")
+    if isinstance(album_image, list) and album_image:
+        album_image = album_image[0]
+    cover_url = (album_image if isinstance(album_image, str) else None) or metadata.get("image")
+    return AlbumDraftData(
+        artist_name=artist_name or request.artist_name,
+        artist_description=metadata.get("description"),
+        artist_description_source_url=request.source_url,
+        artist_description_source_label=metadata.get("source_label"),
+        album_external_url=request.source_url,
+        album_title=album_title,
+        release_year=release_year,
+        cover_source_url=cover_url,
+        tracks=tracks,
+    )
+
+
+def _extract_wikipedia_infobox(html: str) -> dict[str, Any]:
+    infobox_m = re.search(r'(?is)<table[^>]*\bclass="[^"]*\binfobox\b[^"]*"[^>]*>(.*?)</table>', html)
+    if not infobox_m:
+        return {}
+    infobox = infobox_m.group(1)
+    values: dict[str, Any] = {}
+    # Parse row-by-row so the th+td regex never spans across rows
+    for row_m in re.finditer(r'(?is)<tr[^>]*>(.*?)</tr>', infobox):
+        row = row_m.group(1)
+        ths = re.findall(r'(?is)<th[^>]*>(.*?)</th>', row)
+        tds = re.findall(r'(?is)<td[^>]*>(.*?)</td>', row)
+        if len(ths) == 1 and len(tds) == 1:
+            key = _html_unescape(_strip_html(ths[0])).strip().rstrip(":")
+            val = _html_unescape(_strip_html(tds[0])).strip()
+            if key and val:
+                values[key] = val
+        for th_content in ths:
+            text = _html_unescape(_strip_html(th_content)).strip()
+            artist_m = re.search(r'(?i)(?:studio|live|compilation)\s+album\s+by\s+(.+)$', text)
+            if artist_m:
+                values["_artist"] = artist_m.group(1).strip()
+    # Cover image from infobox-image cell
+    img_m = re.search(r'(?is)class="[^"]*infobox-image[^"]*"[^>]*>.*?<img[^>]+src="([^"]+)"', infobox)
+    if img_m:
+        src = img_m.group(1)
+        if src.startswith("//"):
+            src = "https:" + src
+        values["_cover"] = src
+    return values
+
+
+def _extract_wikipedia_tracks(html: str) -> list[dict[str, Any]]:
+    tracklist_m = re.search(r'(?is)<table[^>]*\btracklist\b[^>]*>(.*?)</table>', html)
+    if not tracklist_m:
+        return []
+    rows = re.findall(r'(?is)<tr[^>]*>(.*?)</tr>', tracklist_m.group(1))
+    tracks: list[dict[str, Any]] = []
+    for row in rows:
+        # Wikipedia uses <th scope="row"> for track numbers in tracklist tables
+        th_m = re.search(r'(?is)<th[^>]*scope=["\']row["\'][^>]*>(.*?)</th>', row)
+        if not th_m:
+            continue
+        num_raw = _strip_html(th_m.group(1)).strip().rstrip(".")
+        if not num_raw.isdigit():
+            continue
+        cells = re.findall(r'(?is)<td[^>]*>(.*?)</td>', row)
+        if not cells:
+            continue
+        # Strip footnote <sup> refs from title, then decode entities
+        title_html = re.sub(r'(?is)<sup[^>]*>.*?</sup>', '', cells[0])
+        title = _html_unescape(_strip_html(title_html)).strip()
+        # Strip Wikipedia-style enclosing quotes: "Title" → Title, "Title" (with X) → Title (with X)
+        quote_m = re.match(r'^[\u201c"](.*?)[\u201d"]\s*(.*?)\s*$', title)
+        if quote_m:
+            inner = quote_m.group(1).strip()
+            suffix = quote_m.group(2).strip()
+            title = (inner + " " + suffix).strip() if suffix else inner
+        # Normalize spaces inside parentheses left by stripped anchor tags
+        title = re.sub(r'\(\s+', '(', re.sub(r'\s+\)', ')', title))
+        duration_text = _strip_html(cells[-1]).strip()
+        duration_sec = display_to_seconds(duration_text) if re.match(r'^\d+:\d+$', duration_text) else None
+        if title:
+            tracks.append({"track_number": int(num_raw), "title": title, "duration_seconds": duration_sec})
+    return tracks
+
+
+def _wikipedia_album_draft(request: ImportRequest, html: str, metadata: dict[str, Any]) -> AlbumDraftData:
+    infobox = _extract_wikipedia_infobox(html)
+    tracks = _extract_wikipedia_tracks(html)
+    # Album title: strip " - Wikipedia" suffix and "(album)" disambiguation
+    page_title = str(metadata.get("title") or "")
+    album_title = request.album_title or ""
+    if not album_title:
+        raw = re.split(r'\s[\-\u2013\u2014|]\s', page_title, maxsplit=1)[0].strip()
+        album_title = re.sub(r'\s*\([^)]*\balbum\b[^)]*\)\s*', '', raw).strip()
+    # Artist
+    artist_name = request.artist_name or infobox.get("_artist", "")
+    # Release year
+    released = infobox.get("Released") or infobox.get("Release date") or ""
+    year_m = re.search(r'\b(19|20)\d{2}\b', released)
+    release_year = int(year_m.group(0)) if year_m else None
+    # Genre: first value only
+    genre_raw = infobox.get("Genre") or infobox.get("Genres")
+    genre = re.split(r'[,/\n]', genre_raw)[0].strip() if genre_raw else None
+    # Total duration — strip spaces from span-wrapped digits like "49 : 47"
+    length_str = (infobox.get("Length") or "").strip().replace(" ", "")
+    total_seconds = display_to_seconds(length_str) if re.match(r'^\d+:\d+$', length_str) else None
+    return AlbumDraftData(
+        artist_name=artist_name,
+        artist_description=metadata.get("description"),
+        artist_description_source_url=request.source_url,
+        artist_description_source_label=metadata.get("source_label"),
+        album_external_url=request.source_url,
+        album_title=album_title,
+        release_year=release_year,
+        genre=genre,
+        duration_seconds=total_seconds,
+        cover_source_url=infobox.get("_cover") or metadata.get("image"),
+        tracks=tracks,
+    )
+
+
 def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
     metadata = _page_metadata(request.source_url)
     artist_name = request.artist_name.strip()
@@ -231,6 +418,7 @@ def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
         description_source_url=request.source_url,
         description_source_label=metadata.get("source_label"),
         external_url=request.source_url,
+        origin=None,
     )
 
 
@@ -240,6 +428,10 @@ def _best_effort_album_draft(request: ImportRequest) -> AlbumDraftData:
     source_label = str(metadata.get("source_label") or "")
     if "metal-archives.com" in source_label and html:
         return _metal_archives_album_draft(request, html, metadata)
+    if "bandcamp.com" in source_label and html:
+        return _bandcamp_album_draft(request, html, metadata)
+    if "wikipedia.org" in source_label and html:
+        return _wikipedia_album_draft(request, html, metadata)
     page_title = str(metadata.get("title") or "")
     album_title = request.album_title or ""
     if not album_title and page_title:
@@ -360,6 +552,7 @@ class MetadataImporter:
                 "description_source_url": {"type": ["string", "null"]},
                 "description_source_label": {"type": ["string", "null"]},
                 "external_url": {"type": ["string", "null"]},
+                "origin": {"type": ["string", "null"]},
             },
             "required": [
                 "artist_name",
@@ -367,11 +560,13 @@ class MetadataImporter:
                 "description_source_url",
                 "description_source_label",
                 "external_url",
+                "origin",
             ],
         }
         prompt = (
             f"Create a concise artist metadata draft for '{request.artist_name or 'the artist on the source page'}'. "
             "Prefer factual content. If data is uncertain, return null rather than inventing it. "
+            "For 'origin', provide the city and country (or just country) where the artist is from, e.g. 'London, UK' or 'Nashville, USA'. "
             f"Preferred source URL: {request.source_url or 'none provided'}.\n\n"
             f"Reference context:\n{context}"
         )
@@ -574,7 +769,8 @@ class CoverDownloader:
         parsed = urlparse(url)
         suffix = Path(parsed.path).suffix or ".jpg"
         target = self.cover_dir / f"{stem}{suffix[:8]}"
-        with urlopen(url, timeout=30) as response:
+        request = Request(url, headers=DEFAULT_HEADERS)
+        with urlopen(request, timeout=30) as response:
             target.write_bytes(response.read())
         return str(target)
 
