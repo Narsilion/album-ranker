@@ -690,6 +690,34 @@ def _normalize_album_type(value: str | None) -> str | None:
     return _ALBUM_TYPE_MAP.get(value.strip().lower(), value)
 
 
+def _infer_album_type(duration_seconds: int | None, track_count: int | None) -> str | None:
+    """Infer album type from duration and track count when no explicit type is available.
+
+    Thresholds (industry-standard):
+      Single  : ≤3 tracks  OR  duration ≤ 10 min
+      EP      : ≤6 tracks  OR  duration ≤ 30 min
+      Full-length: otherwise
+    Track count takes precedence when available; duration is used as a
+    tie-breaker or sole indicator when track count is unknown.
+    """
+    dur = duration_seconds or 0
+    tc = track_count or 0
+    if tc and tc <= 3:
+        return "Single"
+    if tc and tc <= 6:
+        return "EP"
+    if tc and tc >= 7:
+        return "Full-length"
+    # Track count unknown — fall back to duration only
+    if dur and dur <= 600:   # ≤ 10 min
+        return "Single"
+    if dur and dur <= 1800:  # ≤ 30 min
+        return "EP"
+    if dur and dur > 1800:
+        return "Full-length"
+    return None
+
+
 def _is_streaming_url(url: str | None) -> bool:
     if not url:
         return False
@@ -697,34 +725,41 @@ def _is_streaming_url(url: str | None) -> bool:
     return any(h in host for h in _STREAMING_HOSTS)
 
 
-def _best_effort_album_draft(request: ImportRequest) -> AlbumDraftData:
-    metadata = _page_metadata(request.source_url)
+def _best_effort_album_draft(request: ImportRequest, metadata: dict[str, Any] | None = None) -> AlbumDraftData:
+    if metadata is None:
+        metadata = _page_metadata(request.source_url)
     html = str(metadata.get("html") or "")
-    source_label = str(metadata.get("source_label") or "")
+    source_label = str(metadata.get("source_label") or _host_label(request.source_url) or "")
     if "music.youtube.com" in source_label:
-        return _youtube_music_album_draft(request, html, metadata)
-    if "metal-archives.com" in source_label and html:
-        return _metal_archives_album_draft(request, html, metadata)
-    if "bandcamp.com" in source_label and html:
-        return _bandcamp_album_draft(request, html, metadata)
-    if "wikipedia.org" in source_label and html:
-        return _wikipedia_album_draft(request, html, metadata)
-    page_title = str(metadata.get("title") or "")
-    album_title = request.album_title or ""
-    if not album_title and page_title:
-        album_title = page_title.split(" - ")[0].strip()
-    stream_url = request.source_url if _is_streaming_url(request.source_url) else None
-    return AlbumDraftData(
-        artist_name=request.artist_name,
-        artist_description=metadata.get("description"),
-        artist_description_source_url=request.source_url,
-        artist_description_source_label=metadata.get("source_label"),
-        album_external_url=request.source_url,
-        album_stream_url=stream_url,
-        album_title=album_title,
-        cover_source_url=metadata.get("image"),
-        notes=page_title or None,
-    )
+        draft = _youtube_music_album_draft(request, html, metadata)
+    elif "metal-archives.com" in source_label and html:
+        draft = _metal_archives_album_draft(request, html, metadata)
+    elif "bandcamp.com" in source_label and html:
+        draft = _bandcamp_album_draft(request, html, metadata)
+    elif "wikipedia.org" in source_label and html:
+        draft = _wikipedia_album_draft(request, html, metadata)
+    else:
+        page_title = str(metadata.get("title") or "")
+        album_title = request.album_title or ""
+        if not album_title and page_title:
+            album_title = page_title.split(" - ")[0].strip()
+        stream_url = request.source_url if _is_streaming_url(request.source_url) else None
+        draft = AlbumDraftData(
+            artist_name=request.artist_name,
+            artist_description=metadata.get("description"),
+            artist_description_source_url=request.source_url,
+            artist_description_source_label=metadata.get("source_label"),
+            album_external_url=request.source_url,
+            album_stream_url=stream_url,
+            album_title=album_title,
+            cover_source_url=metadata.get("image"),
+            notes=page_title or None,
+        )
+    if not draft.album_type:
+        inferred = _infer_album_type(draft.duration_seconds, len(draft.tracks) or None)
+        if inferred:
+            draft = draft.model_copy(update={"album_type": inferred})
+    return draft
 
 
 def infer_cover_source_url_from_album_url(album_url: str | None) -> str | None:
@@ -737,6 +772,7 @@ def infer_cover_source_url_from_album_url(album_url: str | None) -> str | None:
 
 _IMAGE_CDN_HOSTS = {
     "lh3.googleusercontent.com",
+    "yt3.googleusercontent.com",
     "i.ytimg.com",
     "i9.ytimg.com",
     "img.youtube.com",
@@ -787,7 +823,11 @@ def _merge_album_drafts(ai_data: dict[str, Any], fallback: AlbumDraftData, reque
     merged["release_year"] = merged.get("release_year") or fallback.release_year
     merged["genre"] = merged.get("genre") or fallback.genre
     merged["duration_seconds"] = merged.get("duration_seconds") or fallback.duration_seconds
-    merged["album_type"] = _normalize_album_type(fallback.album_type or merged.get("album_type"))
+    album_type = _normalize_album_type(fallback.album_type or merged.get("album_type"))
+    if not album_type:
+        track_count = len(merged.get("tracks") or fallback.tracks or [])
+        album_type = _infer_album_type(merged.get("duration_seconds") or fallback.duration_seconds, track_count or None)
+    merged["album_type"] = album_type
     merged["notes"] = fallback.notes or merged.get("notes")
     merged["tracks"] = merged.get("tracks") or [track.model_dump(mode="json") for track in fallback.tracks]
     merged["cover_source_url"] = (
@@ -913,7 +953,7 @@ class MetadataImporter:
     def create_album_draft(self, request: ImportRequest, *, model: str) -> AlbumDraftData:
         source_metadata = _page_metadata(request.source_url)
         context = self._build_context(request.source_url, metadata=source_metadata)
-        fallback_draft = _best_effort_album_draft(request)
+        fallback_draft = _best_effort_album_draft(request, metadata=source_metadata)
         if self.client is None:
             draft = fallback_draft
             self._set_diagnostics(
@@ -1072,7 +1112,8 @@ class CoverDownloader:
         self.cover_dir.mkdir(parents=True, exist_ok=True)
         parsed = urlparse(url)
         suffix = Path(parsed.path).suffix or ".jpg"
-        target = self.cover_dir / f"{stem}{suffix[:8]}"
+        safe_stem = re.sub(r"[^a-zA-Z0-9_.-]", "-", stem)
+        target = self.cover_dir / f"{safe_stem}{suffix[:8]}"
         request = Request(url, headers=DEFAULT_HEADERS)
         with urlopen(request, timeout=30) as response:
             target.write_bytes(response.read())

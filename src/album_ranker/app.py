@@ -27,9 +27,11 @@ from album_ranker.schemas import (
     ImportConfirmResponse,
     ImportDraftResponse,
     ImportRequest,
+    RefreshAlbumRequest,
     ReorderListItemsRequest,
     SettingsRecord,
     SettingsUpdateRequest,
+    TrackUpsert,
 )
 from album_ranker.settings import Settings
 from album_ranker.ui import (
@@ -214,6 +216,33 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True}
 
+    @app.post("/api/artists/{artist_id}/refresh", response_model=ArtistRecord)
+    async def refresh_artist(artist_id: int, payload: RefreshAlbumRequest = RefreshAlbumRequest()) -> ArtistRecord:
+        try:
+            existing = db.get_artist(artist_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        source_url = payload.source_url or existing.external_url
+        if not source_url:
+            raise HTTPException(
+                status_code=400,
+                detail="No source URL available. Add an external URL to the artist first.",
+            )
+        request = ImportRequest(
+            artist_name=existing.name,
+            source_url=source_url,
+        )
+        draft_data = importer.create_artist_draft(request, model=db.get_active_model(settings.model))
+        upsert = ArtistUpsert(
+            name=draft_data.artist_name or existing.name,
+            description=draft_data.description or existing.description,
+            description_source_url=draft_data.description_source_url or existing.description_source_url,
+            description_source_label=draft_data.description_source_label or existing.description_source_label,
+            external_url=draft_data.external_url or existing.external_url,
+            origin=draft_data.origin or existing.origin,
+        )
+        return db.update_artist(artist_id, upsert)
+
     @app.get("/api/albums", response_model=list[dict])
     async def list_albums() -> list[dict]:
         return [album.model_dump(mode="json") for album in db.list_albums()]
@@ -256,6 +285,53 @@ def create_app(
         target = settings.cover_dir / f"album-{album_id}-cover{suffix}"
         target.write_bytes(await file.read())
         return db.patch_album_cover(album_id, str(target))
+
+    @app.post("/api/albums/{album_id}/refresh", response_model=AlbumDetailRecord)
+    async def refresh_album(album_id: int, payload: RefreshAlbumRequest = RefreshAlbumRequest()) -> AlbumDetailRecord:
+        try:
+            existing = db.get_album(album_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        source_url = payload.source_url or existing.album_external_url
+        if not source_url:
+            raise HTTPException(
+                status_code=400,
+                detail="No source URL available. Add an external URL to the album first.",
+            )
+        request = ImportRequest(
+            artist_name=existing.artist_name,
+            album_title=existing.title,
+            source_url=source_url,
+        )
+        draft_data = importer.create_album_draft(request, model=db.get_active_model(settings.model))
+        tracks = [
+            TrackUpsert(track_number=t.track_number, title=t.title, duration_seconds=t.duration_seconds)
+            for t in draft_data.tracks
+        ]
+        # Preserve cover if already downloaded locally; only re-download if no local cover
+        cover_source_url = existing.cover_source_url if existing.cover_image_path else (
+            draft_data.cover_source_url or existing.cover_source_url
+        )
+        upsert = AlbumUpsert(
+            artist_name=existing.artist_name,
+            artist_description=draft_data.artist_description or existing.artist_description,
+            artist_description_source_url=draft_data.artist_description_source_url or existing.artist_description_source_url,
+            artist_description_source_label=draft_data.artist_description_source_label or existing.artist_description_source_label,
+            album_external_url=draft_data.album_external_url or existing.album_external_url,
+            album_stream_url=existing.album_stream_url,
+            album_type=draft_data.album_type or existing.album_type,
+            title=draft_data.album_title or existing.title,
+            release_year=draft_data.release_year or existing.release_year,
+            genre=draft_data.genre or existing.genre,
+            rating=existing.rating,
+            duration_seconds=draft_data.duration_seconds or existing.duration_seconds,
+            cover_image_path=existing.cover_image_path,
+            cover_source_url=cover_source_url,
+            notes=draft_data.notes or existing.notes,
+            tracks=tracks or list(existing.tracks),
+        )
+        upsert = _resolve_album_cover(upsert, None, cover_downloader)
+        return db.update_album(album_id, upsert)
 
     @app.delete("/api/albums/{album_id}")
     async def delete_album(album_id: int) -> dict[str, bool]:

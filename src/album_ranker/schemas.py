@@ -166,6 +166,10 @@ class ImportRequest(BaseModel):
     source_url: str | None = None
 
 
+class RefreshAlbumRequest(BaseModel):
+    source_url: str | None = None
+
+
 class ImportTrackDraft(BaseModel):
     track_number: int = Field(ge=1)
     title: str

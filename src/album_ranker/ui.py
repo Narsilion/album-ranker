@@ -331,6 +331,31 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         color: var(--muted);
         font-size: 14px;
       }}
+      .album-genre {{
+        margin-top: 4px;
+        color: var(--accent);
+        font-size: 13px;
+      }}
+      .letter-btn {{
+        padding: 3px 8px;
+        font-size: 13px;
+        min-width: 30px;
+        background: var(--surface);
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        cursor: pointer;
+        line-height: 1.4;
+      }}
+      .letter-btn:hover {{
+        color: var(--fg);
+        border-color: var(--muted);
+      }}
+      .letter-btn.active {{
+        background: var(--accent);
+        color: #fff;
+        border-color: var(--accent);
+      }}
       .rating-line {{
         display: flex;
         align-items: center;
@@ -579,6 +604,11 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         border: 1px solid rgba(255, 122, 61, 0.18);
       }}
       .hidden {{ display: none !important; }}
+      @keyframes indeterminate-slide {{
+        0%   {{ left: -50%; width: 40%; }}
+        50%  {{ left: 60%; width: 40%; }}
+        100% {{ left: 110%; width: 40%; }}
+      }}
       code, pre {{
         font-family: "SFMono-Regular", "Menlo", monospace;
       }}
@@ -759,7 +789,7 @@ def _album_card_markup(album: AlbumCardRecord, *, show_artist: bool = True) -> s
         <div class="cover"><img src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover"></div>
         <div class="album-title">{_escape(album.title)}</div>
         <div class="album-subtitle">{_escape(artist_line)}</div>
-        <div class="album-subtitle">{_escape(genre_line)}</div>
+        <div class="album-genre">{_escape(genre_line)}</div>
         {rating_markup}
       </a>
     """
@@ -862,7 +892,8 @@ def render_artists_page(
               </div>
             </div>
             <div class="row">
-              <button type="submit">Populate With AI</button>
+              <button type="submit" id="artistImportSubmitBtn">Populate With AI</button>
+              <button type="button" id="artistImportCancelBtn" class="secondary hidden">Cancel</button>
               <span class="status" id="artistImportStatus"></span>
             </div>
           </form>
@@ -934,6 +965,11 @@ def render_artists_page(
         <div class="detail-head" style="margin-bottom:12px;">
           <div class="panel-title" style="margin-bottom:0;">Library Artists</div>
           <input id="artistSearch" type="search" placeholder="Search artists…" style="max-width:260px;">
+        </div>
+        <div id="artistLetterBar" style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:14px;">
+          <button type="button" class="letter-btn active" data-letter="">All</button>
+          {''.join(f'<button type="button" class="letter-btn" data-letter="{c}">{c}</button>' for c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')}
+          <button type="button" class="letter-btn" data-letter="#">#</button>
         </div>
         <div id="artistList">{artists_markup}</div>
       </section>
@@ -1029,18 +1065,43 @@ def render_artists_page(
           }});
           window.location.reload();
         }});
+        let artistImportAbortCtrl = null;
+        document.getElementById("artistImportCancelBtn").addEventListener("click", () => {{
+          if (artistImportAbortCtrl) {{
+            artistImportAbortCtrl.abort();
+            artistImportAbortCtrl = null;
+          }}
+        }});
         artistImportForm.addEventListener("submit", async (event) => {{
           event.preventDefault();
+          const submitBtn = document.getElementById("artistImportSubmitBtn");
+          const cancelBtn = document.getElementById("artistImportCancelBtn");
+          artistImportAbortCtrl = new AbortController();
+          submitBtn.disabled = true;
+          cancelBtn.classList.remove("hidden");
           artistImportStatus.textContent = "Creating draft...";
-          const response = await fetchJson("/api/import/artist", {{
-            method: "POST",
-            body: JSON.stringify({{
-              artist_name: "",
-              source_url: artistImportForm.source_url.value.trim() || null,
-            }}),
-          }});
-          fillArtistImportDraft(response.draft);
-          artistImportStatus.textContent = "Draft ready for review.";
+          try {{
+            const response = await fetchJson("/api/import/artist", {{
+              method: "POST",
+              signal: artistImportAbortCtrl.signal,
+              body: JSON.stringify({{
+                artist_name: "",
+                source_url: artistImportForm.source_url.value.trim() || null,
+              }}),
+            }});
+            fillArtistImportDraft(response.draft);
+            artistImportStatus.textContent = "Draft ready for review.";
+          }} catch (err) {{
+            if (err.name === "AbortError") {{
+              artistImportStatus.textContent = "Cancelled.";
+            }} else {{
+              artistImportStatus.textContent = err.message || "Import failed.";
+            }}
+          }} finally {{
+            artistImportAbortCtrl = null;
+            submitBtn.disabled = false;
+            cancelBtn.classList.add("hidden");
+          }}
         }});
         artistConfirmForm.addEventListener("submit", async (event) => {{
           event.preventDefault();
@@ -1064,15 +1125,30 @@ def render_artists_page(
         }});
         syncArtistToolsToggle();
 
-        // Artist search
+        // Artist letter + text filter
+        let activeLetter = "";
+        function applyArtistFilters() {{
+          const q = (document.getElementById("artistSearch")?.value || "").trim().toLowerCase();
+          document.querySelectorAll("#artistList .artist-card").forEach(card => {{
+            const name = card.dataset.name || "";
+            const firstChar = name.charAt(0);
+            const letterMatch = activeLetter === ""
+              || (activeLetter === "#" && !/[a-z]/.test(firstChar))
+              || firstChar === activeLetter.toLowerCase();
+            const textMatch = q === "" || name.includes(q);
+            card.classList.toggle("hidden", !(letterMatch && textMatch));
+          }});
+        }}
+        document.querySelectorAll("#artistLetterBar .letter-btn").forEach(btn => {{
+          btn.addEventListener("click", () => {{
+            activeLetter = btn.dataset.letter;
+            document.querySelectorAll("#artistLetterBar .letter-btn").forEach(b => b.classList.toggle("active", b === btn));
+            applyArtistFilters();
+          }});
+        }});
         const artistSearch = document.getElementById("artistSearch");
         if (artistSearch) {{
-          artistSearch.addEventListener("input", () => {{
-            const q = artistSearch.value.trim().toLowerCase();
-            document.querySelectorAll("#artistList .artist-card").forEach(card => {{
-              card.classList.toggle("hidden", q !== "" && !card.dataset.name.includes(q));
-            }});
-          }});
+          artistSearch.addEventListener("input", applyArtistFilters);
         }}
       </script>
     """
@@ -1111,6 +1187,55 @@ def render_artist_detail_page(
         <div id="{clamp_id}" class="clamp muted">{_escape(artist.description or 'No description yet.')}</div>
         <button type="button" class="toggle-link" data-toggle-clamp="{clamp_id}">MORE</button>
         {f'<div class="meta-item" style="margin-top:10px;"><span class="meta-item-label">Origin</span>{_escape(artist.origin)}</div>' if artist.origin else ''}
+        <div class="meta-stack" style="margin-top:14px;">
+          <button type="button" id="artistEditToggle" class="secondary" style="width:100%; margin-bottom:8px;">Edit Artist Metadata</button>
+          <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px;">
+            <input id="artistRefreshUrlInput" placeholder="Source URL (optional)" value="{_escape(artist.external_url)}" style="flex:1; min-width:0; font-size:0.82em; padding:5px 8px;">
+            <button type="button" id="artistRefreshBtn" class="secondary" style="white-space:nowrap; flex:0 0 auto;" title="Re-fetch metadata from source URL using AI">&#8635; Refresh</button>
+            <button type="button" id="artistRefreshCancelBtn" class="secondary hidden" style="white-space:nowrap; flex:0 0 auto;">Cancel</button>
+          </div>
+          <div id="artistRefreshProgress" style="display:none; margin-bottom:4px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
+            <div id="artistRefreshBar" style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
+          </div>
+          <div class="status" id="artistRefreshStatus" style="text-align:center; font-size:0.85em; margin-bottom:4px;"></div>
+        </div>
+      </section>
+      <section class="panel hidden" id="artistEditPanel" style="margin-top:16px;">
+        <div class="detail-head">
+          <div class="panel-title" style="margin-bottom:0;">Edit Artist</div>
+          <button type="button" id="artistDeleteButton" class="danger">Delete Artist</button>
+        </div>
+        <form id="artistDetailForm">
+          <div class="form-field">
+            <label class="form-label" for="artistEditName">Name</label>
+            <input id="artistEditName" name="name" value="{_escape(artist.name)}" required>
+          </div>
+          <div class="form-field">
+            <label class="form-label" for="artistEditOrigin">Origin</label>
+            <input id="artistEditOrigin" name="origin" value="{_escape(artist.origin or '')}" placeholder="e.g. UK, London">
+          </div>
+          <div class="form-field">
+            <label class="form-label" for="artistEditExternalUrl">External URL</label>
+            <input id="artistEditExternalUrl" name="external_url" value="{_escape(artist.external_url or '')}" placeholder="https://www.metal-archives.com/bands/...">
+          </div>
+          <div class="form-field">
+            <label class="form-label" for="artistEditDescSrcUrl">Description Source URL</label>
+            <input id="artistEditDescSrcUrl" name="description_source_url" value="{_escape(artist.description_source_url or '')}" placeholder="https://...">
+          </div>
+          <div class="form-field">
+            <label class="form-label" for="artistEditDescSrcLabel">Description Source Label</label>
+            <input id="artistEditDescSrcLabel" name="description_source_label" value="{_escape(artist.description_source_label or '')}" placeholder="e.g. Metal Archives">
+          </div>
+          <div class="form-field">
+            <label class="form-label" for="artistEditDescription">Description</label>
+            <textarea id="artistEditDescription" name="description" placeholder="Artist description">{_escape(artist.description or '')}</textarea>
+          </div>
+          <div class="row">
+            <button type="submit">Save Changes</button>
+            <button type="button" class="secondary" id="artistEditCancel">Cancel</button>
+            <span class="status" id="artistDetailStatus"></span>
+          </div>
+        </form>
       </section>
       <section class="panel" style="margin-top:20px;">
         <div class="detail-head">
@@ -1133,7 +1258,8 @@ def render_artist_detail_page(
             </div>
           </div>
           <div class="row">
-            <button type="submit">Populate With AI</button>
+            <button type="submit" id="artistAlbumImportSubmitBtn">Populate With AI</button>
+            <button type="button" id="artistAlbumImportCancelBtn" class="secondary hidden">Cancel</button>
             <span class="status" id="artistAlbumImportStatus"></span>
           </div>
         </form>
@@ -1253,6 +1379,103 @@ def render_artist_detail_page(
         <div class="album-grid">{albums_markup}</div>
       </section>
       <script>
+        // ── Artist edit panel ─────────────────────────────────────────────────
+        (function() {{
+          const artistEditToggle = document.getElementById("artistEditToggle");
+          const artistEditPanel = document.getElementById("artistEditPanel");
+          function syncArtistEditToggle() {{
+            const isOpen = !artistEditPanel.classList.contains("hidden");
+            artistEditToggle.textContent = isOpen ? "Close Editor" : "Edit Artist Metadata";
+          }}
+          artistEditToggle.addEventListener("click", () => {{
+            const willOpen = artistEditPanel.classList.contains("hidden");
+            artistEditPanel.classList.toggle("hidden");
+            syncArtistEditToggle();
+            if (willOpen) {{
+              artistEditPanel.scrollIntoView({{ behavior: "smooth", block: "start" }});
+            }}
+          }});
+          syncArtistEditToggle();
+          document.getElementById("artistEditCancel").addEventListener("click", () => {{
+            artistEditPanel.classList.add("hidden");
+            syncArtistEditToggle();
+          }});
+          document.getElementById("artistDetailForm").addEventListener("submit", async (event) => {{
+            event.preventDefault();
+            const form = event.currentTarget;
+            const status = document.getElementById("artistDetailStatus");
+            status.textContent = "Saving\u2026";
+            try {{
+              await fetchJson("/api/artists/{artist.id}", {{
+                method: "PUT",
+                body: JSON.stringify({{
+                  name: form.name.value.trim(),
+                  description: form.description.value.trim() || null,
+                  description_source_url: form.description_source_url.value.trim() || null,
+                  description_source_label: form.description_source_label.value.trim() || null,
+                  external_url: form.external_url.value.trim() || null,
+                  origin: form.origin.value.trim() || null,
+                }}),
+              }});
+              status.textContent = "\u2713 Saved \u2014 reloading\u2026";
+              window.location.reload();
+            }} catch (err) {{
+              status.textContent = err.message || "Save failed.";
+            }}
+          }});
+          document.getElementById("artistDeleteButton").addEventListener("click", async () => {{
+            if (!window.confirm("Delete this artist and all their albums? This cannot be undone.")) return;
+            try {{
+              await fetchJson("/api/artists/{artist.id}", {{ method: "DELETE" }});
+              window.location.href = "/artists";
+            }} catch (err) {{
+              alert(err.message || "Delete failed.");
+            }}
+          }});
+        }})();
+        // ── Artist refresh ────────────────────────────────────────────────────
+        (function() {{
+          const btn = document.getElementById("artistRefreshBtn");
+          const cancelBtn = document.getElementById("artistRefreshCancelBtn");
+          const status = document.getElementById("artistRefreshStatus");
+          const progress = document.getElementById("artistRefreshProgress");
+          const urlInput = document.getElementById("artistRefreshUrlInput");
+          let abortCtrl = null;
+          function resetRefreshUI() {{
+            progress.style.display = "none";
+            btn.disabled = false;
+            btn.classList.remove("hidden");
+            urlInput.disabled = false;
+            btn.textContent = "\u21BB Refresh";
+            cancelBtn.classList.add("hidden");
+            abortCtrl = null;
+          }}
+          cancelBtn.addEventListener("click", () => {{
+            if (abortCtrl) abortCtrl.abort();
+          }});
+          btn.addEventListener("click", async () => {{
+            const sourceUrl = urlInput ? urlInput.value.trim() : null;
+            abortCtrl = new AbortController();
+            btn.classList.add("hidden");
+            urlInput.disabled = true;
+            cancelBtn.classList.remove("hidden");
+            status.textContent = "Fetching source and generating metadata\u2026";
+            progress.style.display = "block";
+            try {{
+              await fetchJson("/api/artists/{artist.id}/refresh", {{
+                method: "POST",
+                signal: abortCtrl.signal,
+                body: JSON.stringify({{ source_url: sourceUrl || null }}),
+              }});
+              progress.style.display = "none";
+              status.textContent = "\u2713 Done \u2014 reloading\u2026";
+              window.location.reload();
+            }} catch (err) {{
+              resetRefreshUI();
+              status.textContent = err.name === "AbortError" ? "Cancelled." : (err.message || "Refresh failed.");
+            }}
+          }});
+        }})();
         const artistAlbumToolsPanel = document.getElementById("artistAlbumToolsPanel");
         const artistAlbumToolsToggle = document.getElementById("artistAlbumToolsToggle");
         const artistAlbumImportForm = document.getElementById("artistAlbumImportForm");
@@ -1312,20 +1535,45 @@ def render_artist_detail_page(
           artistAlbumConfirmForm.notes.value = payload.notes || "";
           artistAlbumConfirmForm.tracklist_text.value = (payload.tracks || []).map((track) => `${{track.track_number}}. ${{track.title}}${{track.duration_seconds ? "  " + formatDuration(track.duration_seconds) : ""}}`).join("\\n");
         }}
+        let artistAlbumImportAbortCtrl = null;
+        document.getElementById("artistAlbumImportCancelBtn").addEventListener("click", () => {{
+          if (artistAlbumImportAbortCtrl) {{
+            artistAlbumImportAbortCtrl.abort();
+            artistAlbumImportAbortCtrl = null;
+          }}
+        }});
         artistAlbumImportForm.addEventListener("submit", async (event) => {{
           event.preventDefault();
+          const submitBtn = document.getElementById("artistAlbumImportSubmitBtn");
+          const cancelBtn = document.getElementById("artistAlbumImportCancelBtn");
+          artistAlbumImportAbortCtrl = new AbortController();
+          submitBtn.disabled = true;
+          cancelBtn.classList.remove("hidden");
           artistAlbumImportStatus.textContent = "Creating draft...";
           const form = event.currentTarget;
-          const response = await fetchJson("/api/import/album", {{
-            method: "POST",
-            body: JSON.stringify({{
-              artist_name: form.artist_name.value.trim(),
-              album_title: null,
-              source_url: form.source_url.value.trim() || null,
-            }}),
-          }});
-          fillArtistAlbumDraft(response.draft);
-          artistAlbumImportStatus.textContent = "Draft ready for review.";
+          try {{
+            const response = await fetchJson("/api/import/album", {{
+              method: "POST",
+              signal: artistAlbumImportAbortCtrl.signal,
+              body: JSON.stringify({{
+                artist_name: form.artist_name.value.trim(),
+                album_title: null,
+                source_url: form.source_url.value.trim() || null,
+              }}),
+            }});
+            fillArtistAlbumDraft(response.draft);
+            artistAlbumImportStatus.textContent = "Draft ready for review.";
+          }} catch (err) {{
+            if (err.name === "AbortError") {{
+              artistAlbumImportStatus.textContent = "Cancelled.";
+            }} else {{
+              artistAlbumImportStatus.textContent = err.message || "Import failed.";
+            }}
+          }} finally {{
+            artistAlbumImportAbortCtrl = null;
+            submitBtn.disabled = false;
+            cancelBtn.classList.add("hidden");
+          }}
         }});
         document.getElementById("artistAlbumImportReset").addEventListener("click", () => {{
           artistAlbumImportReview.classList.add("hidden");
@@ -1499,6 +1747,15 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           {('<div class="row" style="margin-top:10px;gap:8px;justify-content:center;">' + (f'<a class="tag" href="{_escape(album.album_external_url)}" target="_blank" rel="noopener noreferrer">Source</a>' if album.album_external_url else '') + (f'<a class="tag" href="{_escape(album.album_stream_url)}" target="_blank" rel="noopener noreferrer">&#9654; Play</a>' if album.album_stream_url else '') + '</div>') if album.album_external_url or album.album_stream_url else ''}
           <div class="meta-stack">
             <button type="button" id="albumEditToggle" class="secondary" style="width:100%; margin-bottom:8px;">Edit Album Metadata</button>
+            <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px;">
+              <input id="albumRefreshUrlInput" placeholder="Source URL (optional)" value="{_escape(album.album_external_url)}" style="flex:1; min-width:0; font-size:0.82em; padding:5px 8px;">
+              <button type="button" id="albumRefreshBtn" class="secondary" style="white-space:nowrap; flex:0 0 auto;" title="Re-fetch metadata from source URL using AI">&#8635; Refresh</button>
+              <button type="button" id="albumRefreshCancelBtn" class="secondary hidden" style="white-space:nowrap; flex:0 0 auto;">Cancel</button>
+            </div>
+            <div id="albumRefreshProgress" style="display:none; margin-bottom:4px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
+              <div id="albumRefreshBar" style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
+            </div>
+            <div class="status" id="albumRefreshStatus" style="text-align:center; font-size:0.85em; margin-bottom:4px;"></div>
             <div class="meta-item">
               <span class="meta-item-label">Length</span>
               {_escape(seconds_to_display(album.duration_seconds) or 'Unknown length')}
@@ -1528,7 +1785,10 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               <input type="hidden" name="cover_source_url" value="{_escape(album.cover_source_url)}">
               <input type="hidden" name="artist_description_source_url" value="{_escape(album.artist_description_source_url)}">
               <input type="hidden" name="artist_description_source_label" value="{_escape(album.artist_description_source_label)}">
-              <input type="hidden" name="album_external_url" value="{_escape(album.album_external_url)}">
+              <div class="form-field">
+                <label class="form-label" for="albumEditExternalUrl">Source URL</label>
+                <input id="albumEditExternalUrl" name="album_external_url" value="{_escape(album.album_external_url)}" placeholder="https://www.metal-archives.com/albums/...">
+              </div>
               <input type="hidden" name="artist_name" value="{_escape(album.artist_name)}">
               <input type="hidden" name="artist_origin" value="{_escape(album.artist_origin or '')}">
               <div class="form-field">
@@ -1541,13 +1801,13 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
                   <input id="albumEditYear" name="release_year" value="{_escape(str(album.release_year or ''))}" placeholder="Year">
                 </div>
                 <div class="form-field">
-                  <label class="form-label" for="albumEditGenre">Genre</label>
-                  <input id="albumEditGenre" name="genre" value="{_escape(album.genre)}" placeholder="Genre">
-                </div>
-                <div class="form-field">
                   <label class="form-label" for="albumEditDuration">Length</label>
                   <input id="albumEditDuration" name="duration" value="{_escape(seconds_to_display(album.duration_seconds))}" placeholder="Length">
                 </div>
+              </div>
+              <div class="form-field">
+                <label class="form-label" for="albumEditGenre">Genre</label>
+                <input id="albumEditGenre" name="genre" value="{_escape(album.genre)}" placeholder="Genre">
               </div>
               <div class="form-field">
                 <label class="form-label" for="albumEditStreamUrl">Stream URL</label>
@@ -1661,6 +1921,48 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           albumEditPanel.classList.add("hidden");
           syncAlbumEditToggle();
         }});
+        (function() {{
+          const btn = document.getElementById('albumRefreshBtn');
+          const cancelBtn = document.getElementById('albumRefreshCancelBtn');
+          const status = document.getElementById('albumRefreshStatus');
+          const progress = document.getElementById('albumRefreshProgress');
+          const urlInput = document.getElementById('albumRefreshUrlInput');
+          let abortCtrl = null;
+          function resetRefreshUI() {{
+            progress.style.display = 'none';
+            btn.disabled = false;
+            btn.classList.remove('hidden');
+            urlInput.disabled = false;
+            btn.textContent = '\u21BB Refresh';
+            cancelBtn.classList.add('hidden');
+            abortCtrl = null;
+          }}
+          cancelBtn.addEventListener('click', () => {{
+            if (abortCtrl) abortCtrl.abort();
+          }});
+          btn.addEventListener('click', async () => {{
+            const sourceUrl = urlInput ? urlInput.value.trim() : null;
+            abortCtrl = new AbortController();
+            btn.classList.add('hidden');
+            urlInput.disabled = true;
+            cancelBtn.classList.remove('hidden');
+            status.textContent = 'Fetching source and generating metadata\u2026';
+            progress.style.display = 'block';
+            try {{
+              await fetchJson('/api/albums/{album.id}/refresh', {{
+                method: 'POST',
+                signal: abortCtrl.signal,
+                body: JSON.stringify({{ source_url: sourceUrl || null }}),
+              }});
+              progress.style.display = 'none';
+              status.textContent = '\u2713 Done \u2014 reloading\u2026';
+              window.location.reload();
+            }} catch (err) {{
+              resetRefreshUI();
+              status.textContent = err.name === 'AbortError' ? 'Cancelled.' : (err.message || 'Refresh failed.');
+            }}
+          }});
+        }})();
         albumDeleteButton.addEventListener("click", async () => {{
           if (!window.confirm(`Delete {_escape(album.artist_name)} - {_escape(album.title)}?`)) return;
           const status = document.getElementById("albumDetailStatus");
