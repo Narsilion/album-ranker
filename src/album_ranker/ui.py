@@ -768,7 +768,7 @@ def _artist_markup(artist: ArtistWithAlbumsRecord) -> str:
             <h3><a href="/artists/{artist.id}" style="text-decoration:none;">{_escape(artist.name)}</a></h3>
           </div>
           <div class="row" style="justify-content:flex-end; flex:0 0 auto;">
-            <button type="button" class="secondary edit-artist" data-artist='{_json(artist.model_dump())}'>Edit</button>
+            <button type="button" class="secondary edit-artist" data-artist="{_escape(_json(artist.model_dump()))}">Edit</button>
             <button type="button" class="danger delete-artist" data-artist-id="{artist.id}" data-artist-name="{_escape(artist.name)}">Delete</button>
           </div>
         </div>
@@ -1002,6 +1002,7 @@ def render_artists_page(
         function fillArtistForm(data) {{
           artistToolsPanel.classList.remove("hidden");
           syncArtistToolsToggle();
+          artistToolsPanel.scrollIntoView({{ behavior: "smooth", block: "start" }});
           artistForm.artist_id.value = data.id || "";
           artistForm.name.value = data.name || data.artist_name || "";
           artistForm.description.value = data.description || "";
@@ -1059,11 +1060,15 @@ def render_artists_page(
             origin: artistForm.origin.value.trim() || null,
           }};
           const artistId = artistForm.artist_id.value.trim();
-          await fetchJson(artistId ? `/api/artists/${{artistId}}` : "/api/artists", {{
+          const result = await fetchJson(artistId ? `/api/artists/${{artistId}}` : "/api/artists", {{
             method: artistId ? "PUT" : "POST",
             body: JSON.stringify(payload),
           }});
-          window.location.reload();
+          if (!artistId && result?.id) {{
+            window.location.href = `/artists/${{result.id}}`;
+          }} else {{
+            window.location.reload();
+          }}
         }});
         let artistImportAbortCtrl = null;
         document.getElementById("artistImportCancelBtn").addEventListener("click", () => {{
@@ -1106,7 +1111,7 @@ def render_artists_page(
         artistConfirmForm.addEventListener("submit", async (event) => {{
           event.preventDefault();
           artistImportStatus.textContent = "Saving import...";
-          await fetchJson(`/api/import/${{artistConfirmForm.draft_id.value}}/confirm`, {{
+          const confirmResult = await fetchJson(`/api/import/${{artistConfirmForm.draft_id.value}}/confirm`, {{
             method: "POST",
             body: JSON.stringify({{
               target_type: "artist",
@@ -1121,7 +1126,11 @@ def render_artists_page(
               }},
             }}),
           }});
-          window.location.reload();
+          if (confirmResult?.artist?.id) {{
+            window.location.href = `/artists/${{confirmResult.artist.id}}`;
+          }} else {{
+            window.location.reload();
+          }}
         }});
         syncArtistToolsToggle();
 
