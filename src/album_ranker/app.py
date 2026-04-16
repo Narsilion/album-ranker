@@ -112,7 +112,7 @@ def create_app(
     @app.get("/artists", response_class=HTMLResponse)
     async def artists_page() -> str:
         imports = [draft for draft in reversed(_all_drafts(db)) if draft.target_type == "artist" and draft.status == "draft"]
-        return render_artists_page(build_settings(), db.list_artists(), imports)
+        return render_artists_page(build_settings(), db.list_artists(), db.list_genres(), imports)
 
     @app.get("/artists/{artist_id}", response_class=HTMLResponse)
     async def artist_detail_page(artist_id: int) -> str:
@@ -446,11 +446,7 @@ def create_app(
             return ImportConfirmResponse(draft=updated, artist=artist)
         album_upsert = AlbumUpsert.model_validate(payload.payload)
         album_upsert = _resolve_album_cover(album_upsert, payload.payload, cover_downloader)
-        existing_album = db.get_album_by_artist_and_title(album_upsert.artist_name, album_upsert.title)
-        if existing_album is None:
-            album = db.create_album(album_upsert)
-        else:
-            album = db.update_album(existing_album.id, album_upsert)
+        album = db.create_album(album_upsert)
         updated = db.update_import_job(
             draft_id,
             payload=payload.payload,

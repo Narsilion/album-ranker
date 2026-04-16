@@ -416,7 +416,7 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         gap: 10px;
         flex-wrap: wrap;
       }}
-      .filters select {{
+      .filters select, .filters input {{
         max-width: 240px;
       }}
       .artist-card {{
@@ -761,15 +761,12 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
 
 
 def _artist_markup(artist: ArtistWithAlbumsRecord) -> str:
+    genres_data = "|".join(sorted({a.genre for a in artist.albums if a.genre}))
     return f"""
-      <article class="artist-card" data-name="{_escape(artist.name.lower())}">
+      <article class="artist-card" data-name="{_escape(artist.name.lower())}" data-genres="{_escape(genres_data)}">
         <div class="row">
           <div>
             <h3><a href="/artists/{artist.id}" style="text-decoration:none;">{_escape(artist.name)}</a></h3>
-          </div>
-          <div class="row" style="justify-content:flex-end; flex:0 0 auto;">
-            <button type="button" class="secondary edit-artist" data-artist="{_escape(_json(artist.model_dump()))}">Edit</button>
-            <button type="button" class="danger delete-artist" data-artist-id="{artist.id}" data-artist-name="{_escape(artist.name)}">Delete</button>
           </div>
         </div>
       </article>
@@ -864,10 +861,15 @@ def _list_markup(record: AlbumListRecord, all_albums: "list[AlbumCardRecord] | N
 def render_artists_page(
     settings: SettingsRecord,
     artists: list[ArtistWithAlbumsRecord],
+    genres: list[GenreRecord],
     imports: list[ImportDraftRecord],
 ) -> str:
     artists_markup = "".join(_artist_markup(artist) for artist in artists) or '<p class="muted">No artists yet.</p>'
     has_artists = bool(artists)
+    genre_options = "".join(
+        f'<option value="{_escape(genre.name)}">{_escape(genre.name)}</option>'
+        for genre in genres
+    )
     body = f"""
       <section class="hero">
         <div class="eyebrow">Artists</div>
@@ -928,6 +930,9 @@ def render_artists_page(
                 <button type="submit">Confirm Import</button>
                 <button type="button" class="secondary" id="artistImportReset">Clear</button>
               </div>
+              <div id="artistDuplicateWarning" class="hidden" style="margin-top:10px; padding:10px 12px; background:rgba(255,200,0,0.1); border:1px solid rgba(255,200,0,0.3); border-radius:6px; font-size:0.88em; color:var(--ink);">
+                An artist named <strong id="artistDuplicateName"></strong> already exists in your library. <a id="artistDuplicateLink" href="#" target="_blank">Review existing artist</a>. You can still confirm to add another artist with the same name.
+              </div>
             </form>
           </div>
         </section>
@@ -964,7 +969,10 @@ def render_artists_page(
       <section class="panel" style="margin-top:20px;">
         <div class="detail-head" style="margin-bottom:12px;">
           <div class="panel-title" style="margin-bottom:0;">Library Artists</div>
-          <input id="artistSearch" type="search" placeholder="Search artists…" style="max-width:260px;">
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input id="artistSearch" type="search" placeholder="Search artists…" style="max-width:260px;">
+            <select id="artistGenreFilter"><option value="">Genre</option>{genre_options}</select>
+          </div>
         </div>
         <div id="artistLetterBar" style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:14px;">
           <button type="button" class="letter-btn active" data-letter="">All</button>
@@ -1022,6 +1030,22 @@ def render_artists_page(
           artistConfirmForm.description_source_label.value = draft.draft_payload.description_source_label || "";
           artistConfirmForm.external_url.value = draft.draft_payload.external_url || "";
           artistConfirmForm.origin.value = draft.draft_payload.origin || "";
+          // duplicate detection
+          const importedName = (draft.draft_payload.artist_name || "").trim().toLowerCase();
+          const warning = document.getElementById("artistDuplicateWarning");
+          const existingCard = importedName
+            ? Array.from(document.querySelectorAll("#artistList .artist-card")).find(
+                card => (card.dataset.name || "") === importedName
+              )
+            : null;
+          if (existingCard) {{
+            const link = existingCard.querySelector("a[href^='/artists/']");
+            document.getElementById("artistDuplicateLink").href = link ? link.getAttribute("href") : "/artists";
+            document.getElementById("artistDuplicateName").textContent = draft.draft_payload.artist_name || "";
+            warning.classList.remove("hidden");
+          }} else {{
+            warning.classList.add("hidden");
+          }}
         }}
         document.querySelectorAll(".edit-artist").forEach((button) => {{
           button.addEventListener("click", () => fillArtistForm(JSON.parse(button.dataset.artist)));
@@ -1047,6 +1071,7 @@ def render_artists_page(
           artistImportReview.classList.add("hidden");
           artistConfirmForm.reset();
           artistImportStatus.textContent = "";
+          document.getElementById("artistDuplicateWarning").classList.add("hidden");
         }});
         artistForm.addEventListener("submit", async (event) => {{
           event.preventDefault();
@@ -1134,10 +1159,11 @@ def render_artists_page(
         }});
         syncArtistToolsToggle();
 
-        // Artist letter + text filter
+        // Artist letter + text + genre filter
         let activeLetter = "";
         function applyArtistFilters() {{
           const q = (document.getElementById("artistSearch")?.value || "").trim().toLowerCase();
+          const genre = (document.getElementById("artistGenreFilter")?.value || "").toLowerCase();
           document.querySelectorAll("#artistList .artist-card").forEach(card => {{
             const name = card.dataset.name || "";
             const firstChar = name.charAt(0);
@@ -1145,7 +1171,9 @@ def render_artists_page(
               || (activeLetter === "#" && !/[a-z]/.test(firstChar))
               || firstChar === activeLetter.toLowerCase();
             const textMatch = q === "" || name.includes(q);
-            card.classList.toggle("hidden", !(letterMatch && textMatch));
+            const genres = (card.dataset.genres || "").toLowerCase();
+            const genreMatch = genre === "" || genres.split("|").some(g => g.includes(genre));
+            card.classList.toggle("hidden", !(letterMatch && textMatch && genreMatch));
           }});
         }}
         document.querySelectorAll("#artistLetterBar .letter-btn").forEach(btn => {{
@@ -1158,6 +1186,10 @@ def render_artists_page(
         const artistSearch = document.getElementById("artistSearch");
         if (artistSearch) {{
           artistSearch.addEventListener("input", applyArtistFilters);
+        }}
+        const artistGenreFilter = document.getElementById("artistGenreFilter");
+        if (artistGenreFilter) {{
+          artistGenreFilter.addEventListener("change", applyArtistFilters);
         }}
       </script>
     """
@@ -1190,6 +1222,7 @@ def render_artist_detail_page(
           <div class="panel-title" style="margin-bottom:0;">Artist Overview</div>
           <div class="row" style="justify-content:flex-end; flex:0 0 auto;">
             {source_link}
+            <button type="button" id="artistDeleteButton" class="danger">Delete Artist</button>
             <a class="secondary" href="/artists" style="display:inline-flex; align-items:center; text-decoration:none; border-radius:999px; padding:11px 16px; background:rgba(255,255,255,0.08); color:var(--ink);">Back To Artists</a>
           </div>
         </div>
@@ -1212,7 +1245,6 @@ def render_artist_detail_page(
       <section class="panel hidden" id="artistEditPanel" style="margin-top:16px;">
         <div class="detail-head">
           <div class="panel-title" style="margin-bottom:0;">Edit Artist</div>
-          <button type="button" id="artistDeleteButton" class="danger">Delete Artist</button>
         </div>
         <form id="artistDetailForm">
           <div class="form-field">
@@ -1328,6 +1360,9 @@ def render_artist_detail_page(
             <div class="row">
               <button type="submit">Confirm Import</button>
               <button type="button" class="secondary" id="artistAlbumImportReset">Clear</button>
+            </div>
+            <div id="albumDuplicateWarning" class="hidden" style="margin-top:10px; padding:10px 12px; background:rgba(255,200,0,0.1); border:1px solid rgba(255,200,0,0.3); border-radius:6px; font-size:0.88em; color:var(--ink);">
+              An album titled <strong id="albumDuplicateName"></strong> already exists for this artist. <a id="albumDuplicateLink" href="#" target="_blank">Review existing album</a>. You can still confirm to add another album with the same title.
             </div>
           </form>
         </div>
@@ -1543,6 +1578,21 @@ def render_artist_detail_page(
           artistAlbumConfirmForm.album_type.value = payload.album_type || "";
           artistAlbumConfirmForm.notes.value = payload.notes || "";
           artistAlbumConfirmForm.tracklist_text.value = (payload.tracks || []).map((track) => `${{track.track_number}}. ${{track.title}}${{track.duration_seconds ? "  " + formatDuration(track.duration_seconds) : ""}}`).join("\\n");
+          // duplicate detection
+          const importedTitle = (payload.album_title || "").trim().toLowerCase();
+          const albumWarning = document.getElementById("albumDuplicateWarning");
+          const existingAlbumCard = importedTitle
+            ? Array.from(document.querySelectorAll(".album-grid .album-card")).find(
+                card => (card.dataset.title || "").trim().toLowerCase() === importedTitle
+              )
+            : null;
+          if (existingAlbumCard) {{
+            document.getElementById("albumDuplicateLink").href = existingAlbumCard.getAttribute("href");
+            document.getElementById("albumDuplicateName").textContent = payload.album_title || "";
+            albumWarning.classList.remove("hidden");
+          }} else {{
+            albumWarning.classList.add("hidden");
+          }}
         }}
         let artistAlbumImportAbortCtrl = null;
         document.getElementById("artistAlbumImportCancelBtn").addEventListener("click", () => {{
@@ -1594,6 +1644,7 @@ def render_artist_detail_page(
           artistAlbumConfirmForm.artist_origin.value = "{_escape(artist.origin)}";
           artistAlbumConfirmForm.artist_origin.value = "{_escape(artist.origin)}";
           artistAlbumImportStatus.textContent = "";
+          document.getElementById("albumDuplicateWarning").classList.add("hidden");
         }});
         artistAlbumConfirmForm.addEventListener("submit", async (event) => {{
           event.preventDefault();
@@ -1664,7 +1715,7 @@ def render_albums_page(
         for year in sorted({album.release_year for album in albums if album.release_year}, reverse=True)
     )
     artist_options = "".join(
-        f'<option value="{_escape(artist.name)}">{_escape(artist.name)}</option>'
+        f'<option value="{_escape(artist.name)}">'
         for artist in artists
     )
     body = f"""
@@ -1676,10 +1727,10 @@ def render_albums_page(
       <section class="panel" style="margin-top:20px;">
         <div class="panel-title">Filters</div>
         <div class="filters">
-          <input id="albumSearch" type="search" placeholder="Search title or artist…" style="min-width:180px;">
           <select id="genreFilter"><option value="">Genre</option>{genre_options}</select>
           <select id="yearFilter"><option value="">Year</option>{year_options}</select>
-          <select id="artistFilter"><option value="">Artist</option>{artist_options}</select>
+          <input id="artistFilter" type="search" list="artistDatalist" placeholder="Artist…" autocomplete="off">
+          <datalist id="artistDatalist">{artist_options}</datalist>
         </div>
       </section>
       <section class="panel" style="margin-top:20px;">
@@ -1689,28 +1740,22 @@ def render_albums_page(
       <script>
         (function () {{
           const cards = Array.from(document.querySelectorAll("#albumGrid .album-card"));
-          const searchEl  = document.getElementById("albumSearch");
           const genreEl   = document.getElementById("genreFilter");
           const yearEl    = document.getElementById("yearFilter");
           const artistEl  = document.getElementById("artistFilter");
           function applyFilters() {{
-            const q      = searchEl.value.trim().toLowerCase();
             const genre  = genreEl.value;
             const year   = yearEl.value;
-            const artist = artistEl.value;
+            const artist = artistEl.value.trim().toLowerCase();
             cards.forEach(card => {{
-              const matchQ = !q ||
-                card.dataset.title.toLowerCase().includes(q) ||
-                card.dataset.artist.toLowerCase().includes(q);
               card.classList.toggle("hidden",
-                !matchQ ||
                 (genre  && !card.dataset.genre.toLowerCase().includes(genre.toLowerCase())) ||
                 (year   && card.dataset.year !== year) ||
-                (artist && card.dataset.artist !== artist)
+                (artist && !card.dataset.artist.toLowerCase().includes(artist))
               );
             }});
           }}
-          [searchEl, genreEl, yearEl, artistEl].forEach(el => {{
+          [genreEl, yearEl, artistEl].forEach(el => {{
             el.addEventListener(el.tagName === "INPUT" ? "input" : "change", applyFilters);
           }});
         }})();
@@ -1765,6 +1810,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               <div id="albumRefreshBar" style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
             </div>
             <div class="status" id="albumRefreshStatus" style="text-align:center; font-size:0.85em; margin-bottom:4px;"></div>
+            <button type="button" id="albumDeleteButton" class="danger" style="width:100%; margin-bottom:8px;">Delete Album</button>
             <div class="meta-item">
               <span class="meta-item-label">Length</span>
               {_escape(seconds_to_display(album.duration_seconds) or 'Unknown length')}
@@ -1787,7 +1833,6 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           <section class="panel hidden" id="albumEditPanel">
             <div class="detail-head">
               <div class="panel-title" style="margin-bottom:0;">Edit Album</div>
-              <button type="button" id="albumDeleteButton" class="danger">Delete Album</button>
             </div>
             <form id="albumDetailForm">
               <input type="hidden" name="cover_image_path" id="coverImagePathField" value="{_escape(album.cover_image_path or '')}">
@@ -1849,10 +1894,10 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
       </section>
       <section class="panel" style="margin-top:16px; max-width:884px;">
         <div class="panel-title">{_escape(description_title)}</div>
+        {f'<a class="tag" href="{_escape(description_source_url)}" target="_blank" rel="noreferrer" style="flex:0 0 auto;">{_escape(description_source_label)}</a>' if description_source_url else ''}
         <div id="albumArtistDescription" class="clamp">{description_text}</div>
         <div class="row" style="margin-top:8px;">
           <button type="button" class="toggle-link" data-toggle-clamp="albumArtistDescription" style="flex:0 0 auto;">MORE</button>
-          {f'<a class="tag" href="{_escape(description_source_url)}" target="_blank" rel="noreferrer" style="flex:0 0 auto;">{_escape(description_source_label)}</a>' if description_source_url else ''}
         </div>
       </section>
       <script>
@@ -2471,6 +2516,9 @@ def render_genres_page(settings: SettingsRecord, genres: list[GenreRecord]) -> s
               <button type="button" class="secondary" id="genreReset">New</button>
               <span class="status" id="genreStatus"></span>
             </div>
+            <div id="genreDuplicateWarning" class="hidden" style="margin-top:10px; padding:10px 12px; background:rgba(255,200,0,0.1); border:1px solid rgba(255,200,0,0.3); border-radius:6px; font-size:0.88em; color:var(--ink);">
+              A genre named <strong id="genreDuplicateName"></strong> already exists. Saving will create a duplicate.
+            </div>
           </form>
         </section>
         <section class="panel">
@@ -2500,7 +2548,28 @@ def render_genres_page(settings: SettingsRecord, genres: list[GenreRecord]) -> s
           form.reset();
           form.genre_id.value = "";
           document.getElementById("genreStatus").textContent = "";
+          document.getElementById("genreDuplicateWarning").classList.add("hidden");
         }});
+        // ── Genre duplicate detection ─────────────────────────────────────────
+        (function() {{
+          const nameInput = document.getElementById("genreName");
+          const warning = document.getElementById("genreDuplicateWarning");
+          const dupName = document.getElementById("genreDuplicateName");
+          const form = document.getElementById("genreForm");
+          nameInput.addEventListener("input", () => {{
+            const val = nameInput.value.trim().toLowerCase();
+            const currentId = form.genre_id.value.trim();
+            const match = val && Array.from(document.querySelectorAll(".edit-genre")).find(btn => {{
+              return btn.dataset.genreName.trim().toLowerCase() === val && btn.dataset.genreId !== currentId;
+            }});
+            if (match) {{
+              dupName.textContent = match.dataset.genreName;
+              warning.classList.remove("hidden");
+            }} else {{
+              warning.classList.add("hidden");
+            }}
+          }});
+        }})();
         document.querySelectorAll(".edit-genre").forEach((button) => {{
           button.addEventListener("click", () => {{
             const form = document.getElementById("genreForm");
