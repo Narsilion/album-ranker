@@ -1,5 +1,32 @@
 from __future__ import annotations
 
+import re
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _script_blocks(html: str) -> str:
+    """Return concatenated content of all <script> blocks in an HTML page."""
+    return "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", html, re.DOTALL))
+
+
+def _create_album(client, *, artist_name="Band", title="Album", description="A description.\nWith newlines & \"quotes\".") -> dict:
+    return client.post(
+        "/api/albums",
+        json={
+            "artist_name": artist_name,
+            "artist_description": description,
+            "title": title,
+            "release_year": 2026,
+            "genre": "Black Metal",
+            "duration_seconds": 1800,
+            "cover_image_path": None,
+            "cover_source_url": None,
+            "notes": None,
+            "tracks": [],
+        },
+    ).json()
+
 
 def test_manual_album_create_and_render_pages(client) -> None:
     genre_response = client.post("/api/genres", json={"name": "Black Metal"})
@@ -661,3 +688,153 @@ def test_delete_list_removes_existing_list(client) -> None:
     assert deleted.status_code == 200
     assert deleted.json() == {"ok": True}
     assert client.get("/api/lists").json() == []
+
+
+# ── JS safety: no raw _escape() injected into script blocks ──────────────────
+
+def test_album_detail_page_script_blocks_are_valid_when_description_has_special_chars(client) -> None:
+    """Artist description with newlines / quotes must not break JS on the album detail page."""
+    album = _create_album(
+        client,
+        artist_name='Band "With" Quotes',
+        title="My Album",
+        description='Line one.\nLine two with "quotes" and \\backslashes\\.',
+    )
+    page = client.get(f"/albums/{album['id']}")
+    assert page.status_code == 200
+    scripts = _script_blocks(page.text)
+    assert 'Line one.\nLine two' not in scripts
+
+
+def test_artist_detail_page_script_blocks_are_valid_when_description_has_special_chars(client) -> None:
+    """Artist description with newlines and double-quotes must not break JS on the artist detail page."""
+    album = _create_album(
+        client,
+        artist_name='Band "Tricky"',
+        description='Line one.\nLine two.\n"Quoted section".',
+    )
+    artists = client.get("/api/artists").json()
+    artist_id = artists[0]["id"]
+
+    page = client.get(f"/artists/{artist_id}")
+    assert page.status_code == 200
+    scripts = _script_blocks(page.text)
+    assert 'Line one.\nLine two' not in scripts
+
+
+# ── import-confirm redirects to album page ────────────────────────────────────
+
+def test_import_confirm_album_returns_album_id_for_redirect(client) -> None:
+    """Confirm response must include album.id so the UI can navigate to /albums/{id}."""
+    draft = client.post(
+        "/api/import/album",
+        json={
+            "artist_name": "Scythe of Mephisto",
+            "album_title": "Till Life Do Us Part - EP",
+            "source_url": "https://example.com/album",
+        },
+    ).json()["draft"]
+
+    confirm = client.post(
+        f"/api/import/{draft['id']}/confirm",
+        json={
+            "target_type": "album",
+            "chosen_source_url": "https://example.com/album",
+            "payload": {
+                "artist_name": "Scythe of Mephisto",
+                "artist_description": None,
+                "artist_description_source_url": None,
+                "artist_description_source_label": None,
+                "album_external_url": "https://example.com/album",
+                "title": "Till Life Do Us Part - EP",
+                "release_year": 2026,
+                "genre": "Black Metal",
+                "duration_seconds": 1800,
+                "cover_image_path": None,
+                "cover_source_url": None,
+                "notes": None,
+                "tracks": [],
+            },
+        },
+    )
+
+    assert confirm.status_code == 200
+    body = confirm.json()
+    assert body["album"] is not None
+    assert isinstance(body["album"]["id"], int)
+    album_page = client.get(f"/albums/{body['album']['id']}")
+    assert album_page.status_code == 200
+
+
+# ── album refresh via import draft ───────────────────────────────────────────
+
+def test_album_refresh_via_import_draft_then_put(client) -> None:
+    """Simulates the new refresh flow: POST /api/import/album → review → PUT /api/albums/{id}."""
+    album = _create_album(client, artist_name="Vanir", title="Wyrd")
+    album_id = album["id"]
+
+    draft_resp = client.post(
+        "/api/import/album",
+        json={"artist_name": "Vanir", "album_title": "Wyrd", "source_url": "https://example.com/album"},
+    )
+    assert draft_resp.status_code == 200
+    draft_payload = draft_resp.json()["draft"]["draft_payload"]
+    assert draft_payload["album_title"]
+
+    updated = client.put(
+        f"/api/albums/{album_id}",
+        json={
+            "artist_name": "Vanir",
+            "title": draft_payload["album_title"],
+            "release_year": draft_payload.get("release_year") or 2026,
+            "genre": draft_payload.get("genre") or "Folk Metal",
+            "duration_seconds": draft_payload.get("duration_seconds"),
+            "album_type": draft_payload.get("album_type"),
+            "cover_source_url": draft_payload.get("cover_source_url"),
+            "cover_image_path": None,
+            "album_external_url": draft_payload.get("album_external_url"),
+            "album_stream_url": None,
+            "artist_description": draft_payload.get("artist_description"),
+            "artist_description_source_url": draft_payload.get("artist_description_source_url"),
+            "artist_description_source_label": draft_payload.get("artist_description_source_label"),
+            "artist_origin": None,
+            "rating": None,
+            "notes": draft_payload.get("notes"),
+            "tracks": draft_payload.get("tracks") or [],
+        },
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["title"] == draft_payload["album_title"]
+
+
+# ── artist refresh via import draft ──────────────────────────────────────────
+
+def test_artist_refresh_via_import_draft_then_put(client) -> None:
+    """Simulates the new refresh flow: POST /api/import/artist → review → PUT /api/artists/{id}."""
+    _create_album(client, artist_name="Vanir")
+    artist_id = client.get("/api/artists").json()[0]["id"]
+
+    draft_resp = client.post(
+        "/api/import/artist",
+        json={"artist_name": "Vanir", "source_url": "https://example.com/artist"},
+    )
+    assert draft_resp.status_code == 200
+    draft_payload = draft_resp.json()["draft"]["draft_payload"]
+    assert draft_payload["artist_name"]
+
+    updated = client.put(
+        f"/api/artists/{artist_id}",
+        json={
+            "name": draft_payload["artist_name"],
+            "description": draft_payload.get("description"),
+            "description_source_url": draft_payload.get("description_source_url"),
+            "description_source_label": draft_payload.get("description_source_label"),
+            "external_url": draft_payload.get("external_url"),
+            "origin": draft_payload.get("origin"),
+        },
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["name"] == draft_payload["artist_name"]
+

@@ -759,6 +759,14 @@ def _best_effort_album_draft(request: ImportRequest, metadata: dict[str, Any] | 
         inferred = _infer_album_type(draft.duration_seconds, len(draft.tracks) or None)
         if inferred:
             draft = draft.model_copy(update={"album_type": inferred})
+    updates: dict[str, object] = {}
+    if draft.album_title:
+        updates["album_title"] = _fix_allcaps(draft.album_title)
+    if draft.tracks:
+        fixed_tracks = [t.model_copy(update={"title": _fix_allcaps(t.title)}) for t in draft.tracks]
+        updates["tracks"] = fixed_tracks
+    if updates:
+        draft = draft.model_copy(update=updates)
     return draft
 
 
@@ -790,6 +798,22 @@ def _looks_like_image_url(url: str | None) -> bool:
     return any(path.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".gif"])
 
 
+def _fix_allcaps(text: str) -> str:
+    """Title-case *text* if entirely upper-case, or title-case individual all-caps words (≥3 letters)."""
+    if not text:
+        return text
+    if text.isupper():
+        return text.title()
+
+    def _fix_word(m: re.Match) -> str:
+        w = m.group(0)
+        if len(w) >= 3 and w.isupper():
+            return w.title()
+        return w
+
+    return re.sub(r"[A-Za-z']+", _fix_word, text)
+
+
 def _normalize_cover_source_url(candidate_url: str | None, source_url: str | None) -> str | None:
     if not candidate_url:
         return None
@@ -806,7 +830,7 @@ def _normalize_cover_source_url(candidate_url: str | None, source_url: str | Non
 def _merge_album_drafts(ai_data: dict[str, Any], fallback: AlbumDraftData, request: ImportRequest) -> AlbumDraftData:
     merged = dict(ai_data)
     merged["artist_name"] = merged.get("artist_name") or fallback.artist_name or request.artist_name
-    merged["album_title"] = merged.get("album_title") or fallback.album_title or request.album_title or ""
+    merged["album_title"] = _fix_allcaps(merged.get("album_title") or fallback.album_title or request.album_title or "")
     merged["artist_description"] = merged.get("artist_description") or fallback.artist_description
     merged["artist_description_source_url"] = (
         merged.get("artist_description_source_url")
@@ -829,7 +853,11 @@ def _merge_album_drafts(ai_data: dict[str, Any], fallback: AlbumDraftData, reque
         album_type = _infer_album_type(merged.get("duration_seconds") or fallback.duration_seconds, track_count or None)
     merged["album_type"] = album_type
     merged["notes"] = fallback.notes or merged.get("notes")
-    merged["tracks"] = merged.get("tracks") or [track.model_dump(mode="json") for track in fallback.tracks]
+    raw_tracks = merged.get("tracks") or [track.model_dump(mode="json") for track in fallback.tracks]
+    for t in raw_tracks:
+        if isinstance(t, dict) and t.get("title"):
+            t["title"] = _fix_allcaps(t["title"])
+    merged["tracks"] = raw_tracks
     merged["cover_source_url"] = (
         _normalize_cover_source_url(merged.get("cover_source_url"), request.source_url)
         or _normalize_cover_source_url(fallback.cover_source_url, request.source_url)
@@ -1021,7 +1049,8 @@ class MetadataImporter:
             f"Create an album metadata draft for artist '{request.artist_name}' and album '{request.album_title or ''}'. "
             "Return only confident factual data. Use null for unknown fields. "
             f"Preferred source URL: {request.source_url or 'none provided'}.\n"
-            "For album_type use Metal Archives naming: 'Full-length', 'EP', 'Single', 'Demo', 'Live album', 'Compilation', 'Split', 'Video'.\n\n"
+            "For album_type use Metal Archives naming: 'Full-length', 'EP', 'Single', 'Demo', 'Live album', 'Compilation', 'Split', 'Video'.\n"
+            "For notes: use null unless the source contains a real album description or review text. Do NOT put meta-commentary like 'Listed as an album on...' or source/type explanations — the album_type field already covers that.\n\n"
             f"Reference context:\n{context}"
         )
         try:

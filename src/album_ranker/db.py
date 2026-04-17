@@ -444,6 +444,16 @@ class Database:
             return None
         return self.get_album(int(row["id"]))
 
+    def get_album_by_external_url(self, external_url: str) -> AlbumDetailRecord | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT id FROM albums WHERE album_external_url = ? ORDER BY id ASC LIMIT 1",
+                (external_url,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self.get_album(int(row["id"]))
+
     def create_album(self, payload: AlbumUpsert) -> AlbumDetailRecord:
         artist_id = self._get_or_create_artist(payload)
         now = utc_now_iso()

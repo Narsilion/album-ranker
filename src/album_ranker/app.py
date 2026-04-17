@@ -446,7 +446,13 @@ def create_app(
             return ImportConfirmResponse(draft=updated, artist=artist)
         album_upsert = AlbumUpsert.model_validate(payload.payload)
         album_upsert = _resolve_album_cover(album_upsert, payload.payload, cover_downloader)
-        album = db.create_album(album_upsert)
+        existing: AlbumDetailRecord | None = None
+        if album_upsert.album_external_url:
+            existing = db.get_album_by_external_url(album_upsert.album_external_url)
+        if existing is not None:
+            album = db.update_album(existing.id, album_upsert)
+        else:
+            album = db.create_album(album_upsert)
         updated = db.update_import_job(
             draft_id,
             payload=payload.payload,
