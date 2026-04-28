@@ -21,7 +21,7 @@ def _escape(value: str | None) -> str:
 
 
 def _json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=True)
+    return json.dumps(value, ensure_ascii=True).replace("</", "<\\/")
 
 
 def _cover_src(path: str | None) -> str:
@@ -38,6 +38,23 @@ def _display_multiline_text(value: str | None) -> str:
     text = text.replace("; ", ";\n")
     text = text.replace(". ", ".\n")
     return html.escape(text)
+
+
+def _render_overview(text: str | None) -> str:
+    """Escape overview text but convert [label](url) markdown links to clickable <a> tags."""
+    import re
+    if not text:
+        return ""
+    parts: list[str] = []
+    last = 0
+    for m in re.finditer(r'\[([^\]]+)\]\((https?://[^)\s]+)\)', text):
+        parts.append(html.escape(text[last:m.start()]))
+        label = html.escape(m.group(1))
+        url = html.escape(m.group(2))
+        parts.append(f'<a href="{url}" target="_blank" rel="noopener noreferrer">{label}</a>')
+        last = m.end()
+    parts.append(html.escape(text[last:]))
+    return ''.join(parts)
 
 
 def _rating_markup(rating: int | None) -> str:
@@ -57,6 +74,8 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
     navigation = [
         ("Artists", "/artists", "artists"),
         ("Albums", "/albums", "albums"),
+        ("Imports", "/imports", "imports"),
+        ("Bookmarks", "/bookmarks", "bookmarks"),
         ("Genres", "/genres", "genres"),
         ("Lists", "/lists", "lists"),
         ("Settings", "/settings", "settings"),
@@ -275,6 +294,12 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         background: rgba(219, 90, 99, 0.14);
         color: #ffd8dc;
       }}
+      .aa-tab.active {{
+        background: linear-gradient(135deg, rgba(255, 122, 61, 0.92), rgba(255, 154, 87, 0.86));
+        color: #091019;
+        border: 1px solid rgba(255, 191, 145, 0.78);
+        box-shadow: 0 0 0 2px rgba(255, 122, 61, 0.18);
+      }}
       .status {{
         min-height: 22px;
         color: var(--muted);
@@ -331,6 +356,36 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         color: var(--muted);
         font-size: 14px;
       }}
+      .album-type {{
+        margin-top: 3px;
+        font-size: 12px;
+        line-height: 1.35;
+      }}
+      .album-genre {{
+        margin-top: 4px;
+        color: var(--accent);
+        font-size: 13px;
+      }}
+      .letter-btn {{
+        padding: 3px 8px;
+        font-size: 13px;
+        min-width: 30px;
+        background: var(--surface);
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        cursor: pointer;
+        line-height: 1.4;
+      }}
+      .letter-btn:hover {{
+        color: var(--fg);
+        border-color: var(--muted);
+      }}
+      .letter-btn.active {{
+        background: var(--accent);
+        color: #fff;
+        border-color: var(--accent);
+      }}
       .rating-line {{
         display: flex;
         align-items: center;
@@ -374,6 +429,22 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
       .star-btn:hover {{
         transform: scale(1.2);
       }}
+      .card-star-widget .star-btn {{
+        font-size: 13px;
+        padding: 0 1px;
+        transform: none !important;
+      }}
+      .album-card-actions {{
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+      }}
+      .album-card-actions button {{
+        padding: 7px 10px;
+        font-size: 12px;
+        flex: 1 1 auto;
+      }}
       .star-widget-label {{
         font-size: 13px;
         font-weight: 600;
@@ -391,7 +462,7 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         gap: 10px;
         flex-wrap: wrap;
       }}
-      .filters select {{
+      .filters select, .filters input {{
         max-width: 240px;
       }}
       .artist-card {{
@@ -579,6 +650,11 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         border: 1px solid rgba(255, 122, 61, 0.18);
       }}
       .hidden {{ display: none !important; }}
+      @keyframes indeterminate-slide {{
+        0%   {{ left: -50%; width: 40%; }}
+        50%  {{ left: 60%; width: 40%; }}
+        100% {{ left: 110%; width: 40%; }}
+      }}
       code, pre {{
         font-family: "SFMono-Regular", "Menlo", monospace;
       }}
@@ -706,7 +782,12 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         }});
         if (!response.ok) {{
           const payload = await response.text();
-          throw new Error(payload || `Request failed: ${{response.status}}`);
+          let message = payload || `Request failed: ${{response.status}}`;
+          try {{
+            const parsed = JSON.parse(payload);
+            message = parsed.detail || message;
+          }} catch (err) {{}}
+          throw new Error(message);
         }}
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("application/json")) return null;
@@ -725,44 +806,174 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           button.textContent = target.classList.contains("expanded") ? "LESS" : "MORE";
         }});
       }});
+      function updateAlbumListenState(albumId, payload) {{
+        const bookmarked = Boolean(payload.bookmarked_at);
+        const listened = Boolean(payload.listened_at);
+        document.querySelectorAll(`.album-bookmark-toggle[data-album-id="${{albumId}}"]`).forEach((button) => {{
+          button.dataset.bookmarked = bookmarked ? "true" : "false";
+          button.textContent = bookmarked ? "Mark Listened" : "Bookmark";
+          button.classList.toggle("hidden", listened);
+          button.disabled = listened;
+        }});
+        document.querySelectorAll(`.album-listened-toggle[data-album-id="${{albumId}}"]`).forEach((button) => {{
+          button.dataset.listened = listened ? "true" : "false";
+          button.textContent = listened ? "Mark Unlistened" : "Mark Listened";
+        }});
+        document.querySelectorAll(`.album-listened-state[data-album-id="${{albumId}}"]`).forEach((node) => {{
+          node.textContent = listened ? "Listened" : (bookmarked ? "Bookmarked" : "");
+        }});
+      }}
+      document.querySelectorAll(".album-bookmark-toggle").forEach((button) => {{
+        button.addEventListener("click", async (event) => {{
+          event.preventDefault();
+          event.stopPropagation();
+          const albumId = button.dataset.albumId;
+          const nextBookmarked = button.dataset.bookmarked !== "true";
+          button.disabled = true;
+          try {{
+            const payload = await fetchJson(`/api/albums/${{albumId}}/bookmark`, {{
+              method: "PATCH",
+              body: JSON.stringify({{ bookmarked: nextBookmarked }}),
+            }});
+            updateAlbumListenState(albumId, payload);
+            if (payload.bookmarked_at && !payload.listened_at) {{
+              window.location.reload();
+            }}
+          }} catch (error) {{
+            window.alert(error.message || "Bookmark update failed.");
+          }} finally {{
+            if (!button.classList.contains("hidden")) button.disabled = false;
+          }}
+        }});
+      }});
+      document.querySelectorAll(".album-listened-toggle").forEach((button) => {{
+        button.addEventListener("click", async (event) => {{
+          event.preventDefault();
+          event.stopPropagation();
+          const albumId = button.dataset.albumId;
+          const nextListened = button.dataset.listened !== "true";
+          button.disabled = true;
+          try {{
+            const payload = await fetchJson(`/api/albums/${{albumId}}/listened`, {{
+              method: "PATCH",
+              body: JSON.stringify({{ listened: nextListened }}),
+            }});
+            updateAlbumListenState(albumId, payload);
+            if (nextListened && button.dataset.removeOnListened === "true") {{
+              const card = button.closest(".album-card");
+              if (card) card.remove();
+              const grid = document.getElementById("bookmarkGrid");
+              const empty = document.getElementById("bookmarkEmpty");
+              if (grid && empty && !grid.querySelector(".album-card")) empty.classList.remove("hidden");
+            }}
+          }} catch (error) {{
+            window.alert(error.message || "Listened update failed.");
+          }} finally {{
+            button.disabled = false;
+          }}
+        }});
+      }});
     </script>
   </body>
 </html>"""
 
 
-def _artist_markup(artist: ArtistWithAlbumsRecord) -> str:
+def _artist_markup(
+    artist: ArtistWithAlbumsRecord,
+    *,
+    hidden_initially: bool = False,
+    extra_attrs: str = "",
+) -> str:
+    genres_data = "|".join(sorted({a.genre for a in artist.albums if a.genre}))
+    classes = "artist-card hidden" if hidden_initially else "artist-card"
     return f"""
-      <article class="artist-card" data-name="{_escape(artist.name.lower())}">
+      <article class="{classes}" data-name="{_escape(artist.name.lower())}" data-genres="{_escape(genres_data)}"{(' ' + extra_attrs) if extra_attrs else ''}>
         <div class="row">
           <div>
             <h3><a href="/artists/{artist.id}" style="text-decoration:none;">{_escape(artist.name)}</a></h3>
-          </div>
-          <div class="row" style="justify-content:flex-end; flex:0 0 auto;">
-            <button type="button" class="secondary edit-artist" data-artist='{_json(artist.model_dump())}'>Edit</button>
-            <button type="button" class="danger delete-artist" data-artist-id="{artist.id}" data-artist-name="{_escape(artist.name)}">Delete</button>
           </div>
         </div>
       </article>
     """
 
 
-def _album_card_markup(album: AlbumCardRecord, *, show_artist: bool = True) -> str:
+def _album_card_markup(
+    album: AlbumCardRecord,
+    *,
+    show_artist: bool = True,
+    interactive_rating: bool = False,
+    include_bookmark_action: bool = True,
+    include_listened_action: bool = False,
+    remove_on_listened: bool = False,
+    extra_class: str = "",
+    extra_attrs: str = "",
+) -> str:
     year_str = str(album.release_year or "")
     if show_artist:
         artist_line = " • ".join(part for part in [album.artist_name, year_str] if part).strip()
     else:
         artist_line = year_str
     genre_line = album.genre or ""
-    rating_markup = _rating_markup(album.rating)
+    if interactive_rating:
+        current = album.rating or 0
+        star_btns = "".join(
+            f'<button type="button" class="star-btn{" on" if current >= i else ""}" data-value="{i}" aria-label="Rate {i}">&#9733;</button>'
+            for i in range(1, 11)
+        )
+        rating_widget = (
+            f'<div class="card-star-widget" data-album-id="{album.id}" data-current="{current}" '
+            f'style="display:flex; gap:1px; flex-wrap:nowrap; margin-top:6px;" onclick="event.preventDefault(); event.stopPropagation();">'
+            f'{star_btns}</div>'
+        )
+    else:
+        rating_widget = _rating_markup(album.rating)
+    bookmark_button = _album_bookmark_button(album) if include_bookmark_action else ""
+    listened_button = (
+        _album_listened_button(album, remove_on_listened=remove_on_listened)
+        if include_listened_action
+        else ""
+    )
+    actions = f'<div class="album-card-actions">{bookmark_button}{listened_button}</div>' if bookmark_button or listened_button else ""
     return f"""
-      <a class="album-card" href="/albums/{album.id}" data-genre="{_escape(album.genre)}" data-year="{_escape(str(album.release_year or ''))}" data-artist="{_escape(album.artist_name)}" data-title="{_escape(album.title)}">
+      <a class="album-card{(' ' + extra_class) if extra_class else ''}" href="/albums/{album.id}" data-genre="{_escape(album.genre)}" data-year="{_escape(str(album.release_year or ''))}" data-artist="{_escape(album.artist_name)}" data-title="{_escape(album.title)}"{(' ' + extra_attrs) if extra_attrs else ''}>
         <div class="cover"><img src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover"></div>
         <div class="album-title">{_escape(album.title)}</div>
+        {f'<div class="album-type muted">{_escape(album.album_type)}</div>' if album.album_type else ''}
         <div class="album-subtitle">{_escape(artist_line)}</div>
-        <div class="album-subtitle">{_escape(genre_line)}</div>
-        {rating_markup}
+        <div class="album-genre">{_escape(genre_line)}</div>
+        {rating_widget}
+        {actions}
       </a>
     """
+
+
+def _album_bookmark_button(album: AlbumCardRecord) -> str:
+    if album.listened_at:
+        return (
+            f'<button type="button" class="secondary album-bookmark-toggle hidden" data-album-id="{album.id}" '
+            f'data-bookmarked="false" disabled>Bookmark</button>'
+        )
+    if album.bookmarked_at:
+        return _album_listened_button(album)
+    return (
+        f'<button type="button" class="secondary album-bookmark-toggle" data-album-id="{album.id}" '
+        f'data-bookmarked="false">Bookmark</button>'
+    )
+
+
+def _album_listened_button(album: AlbumCardRecord, *, remove_on_listened: bool = False) -> str:
+    listened = bool(album.listened_at)
+    return (
+        f'<button type="button" class="secondary album-listened-toggle" data-album-id="{album.id}" '
+        f'data-listened="{str(listened).lower()}" data-remove-on-listened="{str(remove_on_listened).lower()}">'
+        f'{"Mark Unlistened" if listened else "Mark Listened"}</button>'
+    )
+
+
+def _album_detail_listen_action(album: AlbumCardRecord) -> str:
+    if album.bookmarked_at or album.listened_at:
+        return _album_listened_button(album)
+    return _album_bookmark_button(album)
 
 
 def _list_markup(record: AlbumListRecord, all_albums: "list[AlbumCardRecord] | None" = None) -> str:
@@ -777,6 +988,7 @@ def _list_markup(record: AlbumListRecord, all_albums: "list[AlbumCardRecord] | N
             {_rating_markup(item.album.rating)}
           </div>
           <div class="mini-actions">
+            {_album_bookmark_button(item.album)}
             <button type="button" class="secondary move-up">Up</button>
             <button type="button" class="secondary move-down">Down</button>
             <button type="button" class="danger remove-item">-</button>
@@ -834,10 +1046,23 @@ def _list_markup(record: AlbumListRecord, all_albums: "list[AlbumCardRecord] | N
 def render_artists_page(
     settings: SettingsRecord,
     artists: list[ArtistWithAlbumsRecord],
+    genres: list[GenreRecord],
     imports: list[ImportDraftRecord],
 ) -> str:
-    artists_markup = "".join(_artist_markup(artist) for artist in artists) or '<p class="muted">No artists yet.</p>'
+    recent_artists = sorted(artists, key=lambda artist: (artist.created_at, artist.id), reverse=True)
+    artists_markup = "".join(
+        _artist_markup(
+            artist,
+            hidden_initially=index >= 20,
+            extra_attrs=f'data-recent-index="{index}"',
+        )
+        for index, artist in enumerate(recent_artists)
+    ) or '<p class="muted">No artists yet.</p>'
     has_artists = bool(artists)
+    genre_options = "".join(
+        f'<option value="{_escape(genre.name)}">{_escape(genre.name)}</option>'
+        for genre in genres
+    )
     body = f"""
       <section class="hero">
         <div class="eyebrow">Artists</div>
@@ -862,7 +1087,8 @@ def render_artists_page(
               </div>
             </div>
             <div class="row">
-              <button type="submit">Populate With AI</button>
+              <button type="submit" id="artistImportSubmitBtn">Populate With AI</button>
+              <button type="button" id="artistImportCancelBtn" class="secondary hidden">Cancel</button>
               <span class="status" id="artistImportStatus"></span>
             </div>
           </form>
@@ -896,6 +1122,9 @@ def render_artists_page(
               <div class="row">
                 <button type="submit">Confirm Import</button>
                 <button type="button" class="secondary" id="artistImportReset">Clear</button>
+              </div>
+              <div id="artistDuplicateWarning" class="hidden" style="margin-top:10px; padding:10px 12px; background:rgba(255,200,0,0.1); border:1px solid rgba(255,200,0,0.3); border-radius:6px; font-size:0.88em; color:var(--ink);">
+                An artist named <strong id="artistDuplicateName"></strong> already exists in your library. <a id="artistDuplicateLink" href="#" target="_blank">Review existing artist</a>. You can still confirm to add another artist with the same name.
               </div>
             </form>
           </div>
@@ -933,8 +1162,17 @@ def render_artists_page(
       <section class="panel" style="margin-top:20px;">
         <div class="detail-head" style="margin-bottom:12px;">
           <div class="panel-title" style="margin-bottom:0;">Library Artists</div>
-          <input id="artistSearch" type="search" placeholder="Search artists…" style="max-width:260px;">
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input id="artistSearch" type="search" placeholder="Search artists…" style="max-width:260px;">
+            <select id="artistGenreFilter"><option value="">Genre</option>{genre_options}</select>
+          </div>
         </div>
+        <div id="artistLetterBar" style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:14px;">
+          <button type="button" class="letter-btn active" data-letter="">All</button>
+          {''.join(f'<button type="button" class="letter-btn" data-letter="{c}">{c}</button>' for c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')}
+          <button type="button" class="letter-btn" data-letter="#">#</button>
+        </div>
+        {('<p id="artistFilterHint" class="muted">Showing the 20 most recently added artists. Use filters to search the full library.</p>' if len(artists) > 20 else '')}
         <div id="artistList">{artists_markup}</div>
       </section>
       <script>
@@ -966,6 +1204,7 @@ def render_artists_page(
         function fillArtistForm(data) {{
           artistToolsPanel.classList.remove("hidden");
           syncArtistToolsToggle();
+          artistToolsPanel.scrollIntoView({{ behavior: "smooth", block: "start" }});
           artistForm.artist_id.value = data.id || "";
           artistForm.name.value = data.name || data.artist_name || "";
           artistForm.description.value = data.description || "";
@@ -985,6 +1224,22 @@ def render_artists_page(
           artistConfirmForm.description_source_label.value = draft.draft_payload.description_source_label || "";
           artistConfirmForm.external_url.value = draft.draft_payload.external_url || "";
           artistConfirmForm.origin.value = draft.draft_payload.origin || "";
+          // duplicate detection
+          const importedName = (draft.draft_payload.artist_name || "").trim().toLowerCase();
+          const warning = document.getElementById("artistDuplicateWarning");
+          const existingCard = importedName
+            ? Array.from(document.querySelectorAll("#artistList .artist-card")).find(
+                card => (card.dataset.name || "") === importedName
+              )
+            : null;
+          if (existingCard) {{
+            const link = existingCard.querySelector("a[href^='/artists/']");
+            document.getElementById("artistDuplicateLink").href = link ? link.getAttribute("href") : "/artists";
+            document.getElementById("artistDuplicateName").textContent = draft.draft_payload.artist_name || "";
+            warning.classList.remove("hidden");
+          }} else {{
+            warning.classList.add("hidden");
+          }}
         }}
         document.querySelectorAll(".edit-artist").forEach((button) => {{
           button.addEventListener("click", () => fillArtistForm(JSON.parse(button.dataset.artist)));
@@ -1010,6 +1265,7 @@ def render_artists_page(
           artistImportReview.classList.add("hidden");
           artistConfirmForm.reset();
           artistImportStatus.textContent = "";
+          document.getElementById("artistDuplicateWarning").classList.add("hidden");
         }});
         artistForm.addEventListener("submit", async (event) => {{
           event.preventDefault();
@@ -1023,29 +1279,58 @@ def render_artists_page(
             origin: artistForm.origin.value.trim() || null,
           }};
           const artistId = artistForm.artist_id.value.trim();
-          await fetchJson(artistId ? `/api/artists/${{artistId}}` : "/api/artists", {{
+          const result = await fetchJson(artistId ? `/api/artists/${{artistId}}` : "/api/artists", {{
             method: artistId ? "PUT" : "POST",
             body: JSON.stringify(payload),
           }});
-          window.location.reload();
+          if (!artistId && result?.id) {{
+            window.location.href = `/artists/${{result.id}}`;
+          }} else {{
+            window.location.reload();
+          }}
+        }});
+        let artistImportAbortCtrl = null;
+        document.getElementById("artistImportCancelBtn").addEventListener("click", () => {{
+          if (artistImportAbortCtrl) {{
+            artistImportAbortCtrl.abort();
+            artistImportAbortCtrl = null;
+          }}
         }});
         artistImportForm.addEventListener("submit", async (event) => {{
           event.preventDefault();
+          const submitBtn = document.getElementById("artistImportSubmitBtn");
+          const cancelBtn = document.getElementById("artistImportCancelBtn");
+          artistImportAbortCtrl = new AbortController();
+          submitBtn.disabled = true;
+          cancelBtn.classList.remove("hidden");
           artistImportStatus.textContent = "Creating draft...";
-          const response = await fetchJson("/api/import/artist", {{
-            method: "POST",
-            body: JSON.stringify({{
-              artist_name: "",
-              source_url: artistImportForm.source_url.value.trim() || null,
-            }}),
-          }});
-          fillArtistImportDraft(response.draft);
-          artistImportStatus.textContent = "Draft ready for review.";
+          try {{
+            const response = await fetchJson("/api/import/artist", {{
+              method: "POST",
+              signal: artistImportAbortCtrl.signal,
+              body: JSON.stringify({{
+                artist_name: "",
+                source_url: artistImportForm.source_url.value.trim() || null,
+              }}),
+            }});
+            fillArtistImportDraft(response.draft);
+            artistImportStatus.textContent = "Draft ready for review.";
+          }} catch (err) {{
+            if (err.name === "AbortError") {{
+              artistImportStatus.textContent = "Cancelled.";
+            }} else {{
+              artistImportStatus.textContent = err.message || "Import failed.";
+            }}
+          }} finally {{
+            artistImportAbortCtrl = null;
+            submitBtn.disabled = false;
+            cancelBtn.classList.add("hidden");
+          }}
         }});
         artistConfirmForm.addEventListener("submit", async (event) => {{
           event.preventDefault();
           artistImportStatus.textContent = "Saving import...";
-          await fetchJson(`/api/import/${{artistConfirmForm.draft_id.value}}/confirm`, {{
+          const confirmResult = await fetchJson(`/api/import/${{artistConfirmForm.draft_id.value}}/confirm`, {{
             method: "POST",
             body: JSON.stringify({{
               target_type: "artist",
@@ -1060,19 +1345,51 @@ def render_artists_page(
               }},
             }}),
           }});
-          window.location.reload();
+          if (confirmResult?.artist?.id) {{
+            window.location.href = `/artists/${{confirmResult.artist.id}}`;
+          }} else {{
+            window.location.reload();
+          }}
         }});
         syncArtistToolsToggle();
 
-        // Artist search
+        // Artist letter + text + genre filter
+        let activeLetter = "";
+        function applyArtistFilters() {{
+          const q = (document.getElementById("artistSearch")?.value || "").trim().toLowerCase();
+          const genre = (document.getElementById("artistGenreFilter")?.value || "").toLowerCase();
+          const hasFilter = q !== "" || genre !== "" || activeLetter !== "";
+          document.querySelectorAll("#artistList .artist-card").forEach(card => {{
+            const recentIndex = Number(card.dataset.recentIndex || 0);
+            const name = card.dataset.name || "";
+            const firstChar = name.charAt(0);
+            const letterMatch = activeLetter === ""
+              || (activeLetter === "#" && !/[a-z]/.test(firstChar))
+              || firstChar === activeLetter.toLowerCase();
+            const textMatch = q === "" || name.includes(q);
+            const genres = (card.dataset.genres || "").toLowerCase();
+            const genreMatch = genre === "" || genres.split("|").some(g => g.includes(genre));
+            card.classList.toggle("hidden", !(letterMatch && textMatch && genreMatch) || (!hasFilter && recentIndex >= 20));
+          }});
+          const hint = document.getElementById("artistFilterHint");
+          if (hint) {{
+            hint.classList.toggle("hidden", hasFilter);
+          }}
+        }}
+        document.querySelectorAll("#artistLetterBar .letter-btn").forEach(btn => {{
+          btn.addEventListener("click", () => {{
+            activeLetter = btn.dataset.letter;
+            document.querySelectorAll("#artistLetterBar .letter-btn").forEach(b => b.classList.toggle("active", b === btn));
+            applyArtistFilters();
+          }});
+        }});
         const artistSearch = document.getElementById("artistSearch");
         if (artistSearch) {{
-          artistSearch.addEventListener("input", () => {{
-            const q = artistSearch.value.trim().toLowerCase();
-            document.querySelectorAll("#artistList .artist-card").forEach(card => {{
-              card.classList.toggle("hidden", q !== "" && !card.dataset.name.includes(q));
-            }});
-          }});
+          artistSearch.addEventListener("input", applyArtistFilters);
+        }}
+        const artistGenreFilter = document.getElementById("artistGenreFilter");
+        if (artistGenreFilter) {{
+          artistGenreFilter.addEventListener("change", applyArtistFilters);
         }}
       </script>
     """
@@ -1086,7 +1403,7 @@ def render_artist_detail_page(
     imports: list[ImportDraftRecord],
 ) -> str:
     albums_markup = "".join(
-        _album_card_markup(album, show_artist=False) for album in artist.albums
+        _album_card_markup(album, show_artist=False, interactive_rating=True) for album in artist.albums
     ) or '<p class="muted">No albums added yet.</p>'
     source_link = (
         f'<a class="tag" href="{_escape(artist.description_source_url)}" target="_blank" rel="noreferrer">Open Source</a>'
@@ -1105,12 +1422,96 @@ def render_artist_detail_page(
           <div class="panel-title" style="margin-bottom:0;">Artist Overview</div>
           <div class="row" style="justify-content:flex-end; flex:0 0 auto;">
             {source_link}
+            <button type="button" id="artistDeleteButton" class="danger">Delete Artist</button>
             <a class="secondary" href="/artists" style="display:inline-flex; align-items:center; text-decoration:none; border-radius:999px; padding:11px 16px; background:rgba(255,255,255,0.08); color:var(--ink);">Back To Artists</a>
           </div>
         </div>
         <div id="{clamp_id}" class="clamp muted">{_escape(artist.description or 'No description yet.')}</div>
         <button type="button" class="toggle-link" data-toggle-clamp="{clamp_id}">MORE</button>
         {f'<div class="meta-item" style="margin-top:10px;"><span class="meta-item-label">Origin</span>{_escape(artist.origin)}</div>' if artist.origin else ''}
+        <div class="meta-stack" style="margin-top:14px;">
+          <button type="button" id="artistEditToggle" class="secondary" style="width:100%; margin-bottom:8px;">Edit Artist Metadata</button>
+          <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px;">
+            <input id="artistRefreshUrlInput" placeholder="Source URL (optional)" value="{_escape(artist.external_url)}" style="flex:1; min-width:0; font-size:0.82em; padding:5px 8px;">
+            <button type="button" id="artistRefreshBtn" class="secondary" style="white-space:nowrap; flex:0 0 auto;" title="Re-fetch metadata from source URL using AI">&#8635; Refresh</button>
+            <button type="button" id="artistRefreshCancelBtn" class="secondary hidden" style="white-space:nowrap; flex:0 0 auto;">Cancel</button>
+          </div>
+          <div id="artistRefreshProgress" style="display:none; margin-bottom:4px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
+            <div id="artistRefreshBar" style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
+          </div>
+          <div class="status" id="artistRefreshStatus" style="text-align:center; font-size:0.85em; margin-bottom:4px;"></div>
+        </div>
+      </section>
+      <section class="panel hidden" id="artistRefreshReview" style="margin-top:16px;">
+        <div class="panel-title">Review Refreshed Artist Metadata</div>
+        <form id="artistRefreshForm">
+          <input type="hidden" name="draft_id" id="artistRefreshDraftId">
+          <div class="form-field">
+            <label class="form-label">Name</label>
+            <input name="name" id="artistRefreshName">
+          </div>
+          <div class="form-field">
+            <label class="form-label">Origin</label>
+            <input name="origin" id="artistRefreshOrigin" placeholder="Country or city">
+          </div>
+          <div class="form-field">
+            <label class="form-label">Description</label>
+            <textarea name="description" id="artistRefreshDescription" rows="5" placeholder="Artist description"></textarea>
+          </div>
+          <div class="form-field">
+            <label class="form-label">Description Source URL</label>
+            <input name="description_source_url" id="artistRefreshDescSrcUrl" placeholder="https://...">
+          </div>
+          <div class="form-field">
+            <label class="form-label">Description Source Label</label>
+            <input name="description_source_label" id="artistRefreshDescSrcLabel" placeholder="e.g. Metal Archives">
+          </div>
+          <div class="form-field">
+            <label class="form-label">External URL</label>
+            <input name="external_url" id="artistRefreshExternalUrl" placeholder="https://...">
+          </div>
+          <div class="row">
+            <button type="submit">Apply Changes</button>
+            <button type="button" class="secondary" id="artistRefreshReject">Reject</button>
+            <span class="status" id="artistRefreshApplyStatus"></span>
+          </div>
+        </form>
+      </section>
+      <section class="panel hidden" id="artistEditPanel" style="margin-top:16px;">
+        <div class="detail-head">
+          <div class="panel-title" style="margin-bottom:0;">Edit Artist</div>
+        </div>
+        <form id="artistDetailForm">
+          <div class="form-field">
+            <label class="form-label" for="artistEditName">Name</label>
+            <input id="artistEditName" name="name" value="{_escape(artist.name)}" required>
+          </div>
+          <div class="form-field">
+            <label class="form-label" for="artistEditOrigin">Origin</label>
+            <input id="artistEditOrigin" name="origin" value="{_escape(artist.origin or '')}" placeholder="e.g. UK, London">
+          </div>
+          <div class="form-field">
+            <label class="form-label" for="artistEditExternalUrl">External URL</label>
+            <input id="artistEditExternalUrl" name="external_url" value="{_escape(artist.external_url or '')}" placeholder="https://www.metal-archives.com/bands/...">
+          </div>
+          <div class="form-field">
+            <label class="form-label" for="artistEditDescSrcUrl">Description Source URL</label>
+            <input id="artistEditDescSrcUrl" name="description_source_url" value="{_escape(artist.description_source_url or '')}" placeholder="https://...">
+          </div>
+          <div class="form-field">
+            <label class="form-label" for="artistEditDescSrcLabel">Description Source Label</label>
+            <input id="artistEditDescSrcLabel" name="description_source_label" value="{_escape(artist.description_source_label or '')}" placeholder="e.g. Metal Archives">
+          </div>
+          <div class="form-field">
+            <label class="form-label" for="artistEditDescription">Description</label>
+            <textarea id="artistEditDescription" name="description" placeholder="Artist description">{_escape(artist.description or '')}</textarea>
+          </div>
+          <div class="row">
+            <button type="submit">Save Changes</button>
+            <button type="button" class="secondary" id="artistEditCancel">Cancel</button>
+            <span class="status" id="artistDetailStatus"></span>
+          </div>
+        </form>
       </section>
       <section class="panel" style="margin-top:20px;">
         <div class="detail-head">
@@ -1119,8 +1520,8 @@ def render_artist_detail_page(
         </div>
         <div id="artistAlbumToolsPanel" class="hidden">
         <div class="row" style="margin-bottom:16px; gap:8px;">
-          <button type="button" class="aa-tab secondary active" data-tab="import">Import from URL</button>
-          <button type="button" class="aa-tab secondary" data-tab="manual">Manual</button>
+          <button type="button" class="aa-tab secondary active" data-tab="import" aria-pressed="true">Import from URL</button>
+          <button type="button" class="aa-tab secondary" data-tab="manual" aria-pressed="false">Manual</button>
         </div>
         <div id="aa-tab-import">
         <form id="artistAlbumImportForm">
@@ -1131,9 +1532,13 @@ def render_artist_detail_page(
               <input id="artistAlbumImportSourceUrl" name="source_url" placeholder="Source URL" required>
               <button type="button" class="input-clear-btn" aria-label="Clear">&#x2715;</button>
             </div>
+            <div class="muted" style="font-size:0.85em; margin-top:6px;">
+              Use a Metal Archives album page URL from /albums/..., not the artist page URL.
+            </div>
           </div>
           <div class="row">
-            <button type="submit">Populate With AI</button>
+            <button type="submit" id="artistAlbumImportSubmitBtn">Populate With AI</button>
+            <button type="button" id="artistAlbumImportCancelBtn" class="secondary hidden">Cancel</button>
             <span class="status" id="artistAlbumImportStatus"></span>
           </div>
         </form>
@@ -1194,6 +1599,9 @@ def render_artist_detail_page(
               <button type="submit">Confirm Import</button>
               <button type="button" class="secondary" id="artistAlbumImportReset">Clear</button>
             </div>
+            <div id="albumDuplicateWarning" class="hidden" style="margin-top:10px; padding:10px 12px; background:rgba(255,200,0,0.1); border:1px solid rgba(255,200,0,0.3); border-radius:6px; font-size:0.88em; color:var(--ink);">
+              An album titled <strong id="albumDuplicateName"></strong> already exists for this artist. <a id="albumDuplicateLink" href="#" target="_blank">Review existing album</a>. You can still confirm to add another album with the same title.
+            </div>
           </form>
         </div>
         </div>
@@ -1253,6 +1661,177 @@ def render_artist_detail_page(
         <div class="album-grid">{albums_markup}</div>
       </section>
       <script>
+        // ── Album card inline star ratings ────────────────────────────────────
+        (function() {{
+          document.querySelectorAll(".card-star-widget").forEach(function(widget) {{
+            const albumId = widget.dataset.albumId;
+            let current = Number(widget.dataset.current) || 0;
+            const btns = widget.querySelectorAll(".star-btn");
+            function highlight(n) {{
+              btns.forEach((b, i) => b.classList.toggle("on", i < n));
+            }}
+            highlight(current);
+            btns.forEach(function(btn, idx) {{
+              btn.addEventListener("mouseenter", () => highlight(idx + 1));
+              btn.addEventListener("mouseleave", () => highlight(current));
+              btn.addEventListener("click", async function(e) {{
+                e.preventDefault(); e.stopPropagation();
+                const newVal = (idx + 1 === current) ? null : idx + 1;
+                try {{
+                  await fetchJson(`/api/albums/${{albumId}}/rating`, {{
+                    method: "PATCH",
+                    body: JSON.stringify({{ rating: newVal }}),
+                  }});
+                  current = newVal || 0;
+                  widget.dataset.current = current;
+                  highlight(current);
+                }} catch (err) {{
+                  console.error("Rating error:", err);
+                }}
+              }});
+            }});
+          }});
+        }})();
+        // ── Artist edit panel ─────────────────────────────────────────────────
+        (function() {{
+          const artistEditToggle = document.getElementById("artistEditToggle");
+          const artistEditPanel = document.getElementById("artistEditPanel");
+          function syncArtistEditToggle() {{
+            const isOpen = !artistEditPanel.classList.contains("hidden");
+            artistEditToggle.textContent = isOpen ? "Close Editor" : "Edit Artist Metadata";
+          }}
+          artistEditToggle.addEventListener("click", () => {{
+            const willOpen = artistEditPanel.classList.contains("hidden");
+            artistEditPanel.classList.toggle("hidden");
+            syncArtistEditToggle();
+            if (willOpen) {{
+              artistEditPanel.scrollIntoView({{ behavior: "smooth", block: "start" }});
+            }}
+          }});
+          syncArtistEditToggle();
+          document.getElementById("artistEditCancel").addEventListener("click", () => {{
+            artistEditPanel.classList.add("hidden");
+            syncArtistEditToggle();
+          }});
+          document.getElementById("artistDetailForm").addEventListener("submit", async (event) => {{
+            event.preventDefault();
+            const form = event.currentTarget;
+            const status = document.getElementById("artistDetailStatus");
+            status.textContent = "Saving\u2026";
+            try {{
+              await fetchJson("/api/artists/{artist.id}", {{
+                method: "PUT",
+                body: JSON.stringify({{
+                  name: form.name.value.trim(),
+                  description: form.description.value.trim() || null,
+                  description_source_url: form.description_source_url.value.trim() || null,
+                  description_source_label: form.description_source_label.value.trim() || null,
+                  external_url: form.external_url.value.trim() || null,
+                  origin: form.origin.value.trim() || null,
+                }}),
+              }});
+              status.textContent = "\u2713 Saved \u2014 reloading\u2026";
+              window.location.reload();
+            }} catch (err) {{
+              status.textContent = err.message || "Save failed.";
+            }}
+          }});
+          document.getElementById("artistDeleteButton").addEventListener("click", async () => {{
+            if (!window.confirm("Delete this artist and all their albums? This cannot be undone.")) return;
+            try {{
+              await fetchJson("/api/artists/{artist.id}", {{ method: "DELETE" }});
+              window.location.href = "/artists";
+            }} catch (err) {{
+              alert(err.message || "Delete failed.");
+            }}
+          }});
+        }})();
+        // ── Artist refresh ────────────────────────────────────────────────────
+        (function() {{
+          const btn = document.getElementById("artistRefreshBtn");
+          const cancelBtn = document.getElementById("artistRefreshCancelBtn");
+          const status = document.getElementById("artistRefreshStatus");
+          const progress = document.getElementById("artistRefreshProgress");
+          const urlInput = document.getElementById("artistRefreshUrlInput");
+          let abortCtrl = null;
+          function resetRefreshUI() {{
+            progress.style.display = "none";
+            btn.disabled = false;
+            btn.classList.remove("hidden");
+            urlInput.disabled = false;
+            btn.textContent = "\u21BB Refresh";
+            cancelBtn.classList.add("hidden");
+            abortCtrl = null;
+          }}
+          cancelBtn.addEventListener("click", () => {{
+            if (abortCtrl) abortCtrl.abort();
+          }});
+          btn.addEventListener("click", async () => {{
+            const sourceUrl = urlInput ? urlInput.value.trim() : null;
+            abortCtrl = new AbortController();
+            btn.classList.add("hidden");
+            urlInput.disabled = true;
+            cancelBtn.classList.remove("hidden");
+            status.textContent = "Fetching source and generating metadata\u2026";
+            progress.style.display = "block";
+            const reviewPanel = document.getElementById("artistRefreshReview");
+            if (reviewPanel) reviewPanel.classList.add("hidden");
+            try {{
+              const resp = await fetchJson("/api/import/artist", {{
+                method: "POST",
+                signal: abortCtrl.signal,
+                body: JSON.stringify({{ artist_name: {_json(artist.name)}, source_url: sourceUrl || {_json(artist.external_url)} }}),
+              }});
+              const draft = resp.draft;
+              const p = draft.draft_payload;
+              document.getElementById("artistRefreshDraftId").value = draft.id;
+              document.getElementById("artistRefreshName").value = p.artist_name || '';
+              document.getElementById("artistRefreshOrigin").value = p.origin || '';
+              document.getElementById("artistRefreshDescription").value = p.description || '';
+              document.getElementById("artistRefreshDescSrcUrl").value = p.description_source_url || '';
+              document.getElementById("artistRefreshDescSrcLabel").value = p.description_source_label || '';
+              document.getElementById("artistRefreshExternalUrl").value = p.external_url || '';
+              resetRefreshUI();
+              status.textContent = "Draft ready \u2014 review below.";
+              if (reviewPanel) {{
+                reviewPanel.classList.remove("hidden");
+                reviewPanel.scrollIntoView({{ behavior: "smooth", block: "start" }});
+              }}
+            }} catch (err) {{
+              resetRefreshUI();
+              status.textContent = err.name === "AbortError" ? "Cancelled." : (err.message || "Refresh failed.");
+            }}
+          }});
+          const artistRefreshForm = document.getElementById("artistRefreshForm");
+          if (artistRefreshForm) {{
+            document.getElementById("artistRefreshReject").addEventListener("click", () => {{
+              document.getElementById("artistRefreshReview").classList.add("hidden");
+              status.textContent = '';
+            }});
+            artistRefreshForm.addEventListener("submit", async (e) => {{
+              e.preventDefault();
+              const applyStatus = document.getElementById("artistRefreshApplyStatus");
+              applyStatus.textContent = "Saving\u2026";
+              try {{
+                await fetchJson("/api/artists/{artist.id}", {{
+                  method: "PUT",
+                  body: JSON.stringify({{
+                    name: document.getElementById("artistRefreshName").value.trim(),
+                    description: document.getElementById("artistRefreshDescription").value.trim() || null,
+                    description_source_url: document.getElementById("artistRefreshDescSrcUrl").value.trim() || null,
+                    description_source_label: document.getElementById("artistRefreshDescSrcLabel").value.trim() || null,
+                    external_url: document.getElementById("artistRefreshExternalUrl").value.trim() || null,
+                    origin: document.getElementById("artistRefreshOrigin").value.trim() || null,
+                  }}),
+                }});
+                applyStatus.textContent = "\u2713 Saved \u2014 reloading\u2026";
+                window.location.reload();
+              }} catch (err) {{
+                applyStatus.textContent = err.message || "Save failed.";
+              }}
+            }});
+          }}
+        }})();
         const artistAlbumToolsPanel = document.getElementById("artistAlbumToolsPanel");
         const artistAlbumToolsToggle = document.getElementById("artistAlbumToolsToggle");
         const artistAlbumImportForm = document.getElementById("artistAlbumImportForm");
@@ -1311,32 +1890,89 @@ def render_artist_detail_page(
           artistAlbumConfirmForm.album_type.value = payload.album_type || "";
           artistAlbumConfirmForm.notes.value = payload.notes || "";
           artistAlbumConfirmForm.tracklist_text.value = (payload.tracks || []).map((track) => `${{track.track_number}}. ${{track.title}}${{track.duration_seconds ? "  " + formatDuration(track.duration_seconds) : ""}}`).join("\\n");
+          // duplicate detection
+          const importedTitle = (payload.album_title || "").trim().toLowerCase();
+          const albumWarning = document.getElementById("albumDuplicateWarning");
+          const existingAlbumCard = importedTitle
+            ? Array.from(document.querySelectorAll(".album-grid .album-card")).find(
+                card => (card.dataset.title || "").trim().toLowerCase() === importedTitle
+              )
+            : null;
+          if (existingAlbumCard) {{
+            document.getElementById("albumDuplicateLink").href = existingAlbumCard.getAttribute("href");
+            document.getElementById("albumDuplicateName").textContent = payload.album_title || "";
+            albumWarning.classList.remove("hidden");
+          }} else {{
+            albumWarning.classList.add("hidden");
+          }}
         }}
+        let artistAlbumImportAbortCtrl = null;
+        document.getElementById("artistAlbumImportCancelBtn").addEventListener("click", () => {{
+          if (artistAlbumImportAbortCtrl) {{
+            artistAlbumImportAbortCtrl.abort();
+            artistAlbumImportAbortCtrl = null;
+          }}
+        }});
         artistAlbumImportForm.addEventListener("submit", async (event) => {{
           event.preventDefault();
+          const submitBtn = document.getElementById("artistAlbumImportSubmitBtn");
+          const cancelBtn = document.getElementById("artistAlbumImportCancelBtn");
+          const sourceUrl = document.getElementById("artistAlbumImportSourceUrl").value.trim();
+          const albumUrlMessage = "Please provide a proper Metal Archives album URL from /albums/..., not an artist page URL.";
+          if (!sourceUrl) {{
+            artistAlbumImportStatus.textContent = albumUrlMessage;
+            return;
+          }}
+          try {{
+            const parsed = new URL(sourceUrl);
+            if (parsed.hostname.includes("metal-archives.com") && !parsed.pathname.startsWith("/albums/")) {{
+              artistAlbumImportStatus.textContent = albumUrlMessage;
+              return;
+            }}
+          }} catch (err) {{
+            artistAlbumImportStatus.textContent = albumUrlMessage;
+            return;
+          }}
+          artistAlbumImportAbortCtrl = new AbortController();
+          submitBtn.disabled = true;
+          cancelBtn.classList.remove("hidden");
           artistAlbumImportStatus.textContent = "Creating draft...";
           const form = event.currentTarget;
-          const response = await fetchJson("/api/import/album", {{
-            method: "POST",
-            body: JSON.stringify({{
-              artist_name: form.artist_name.value.trim(),
-              album_title: null,
-              source_url: form.source_url.value.trim() || null,
-            }}),
-          }});
-          fillArtistAlbumDraft(response.draft);
-          artistAlbumImportStatus.textContent = "Draft ready for review.";
+          try {{
+            const response = await fetchJson("/api/import/album", {{
+              method: "POST",
+              signal: artistAlbumImportAbortCtrl.signal,
+              body: JSON.stringify({{
+                artist_name: form.artist_name.value.trim(),
+                album_title: null,
+                source_url: sourceUrl,
+              }}),
+            }});
+            fillArtistAlbumDraft(response.draft);
+            artistAlbumImportStatus.textContent = "Draft ready for review.";
+          }} catch (err) {{
+            if (err.name === "AbortError") {{
+              artistAlbumImportStatus.textContent = "Cancelled.";
+            }} else {{
+              artistAlbumImportStatus.textContent = err.message || "Import failed.";
+            }}
+          }} finally {{
+            artistAlbumImportAbortCtrl = null;
+            submitBtn.disabled = false;
+            cancelBtn.classList.add("hidden");
+          }}
         }});
         document.getElementById("artistAlbumImportReset").addEventListener("click", () => {{
           artistAlbumImportReview.classList.add("hidden");
           artistAlbumConfirmForm.reset();
-          artistAlbumConfirmForm.artist_name.value = "{_escape(artist.name)}";
-          artistAlbumConfirmForm.artist_description.value = "{_escape(artist.description)}";
-          artistAlbumConfirmForm.artist_description_source_url.value = "{_escape(artist.description_source_url)}";
-          artistAlbumConfirmForm.artist_description_source_label.value = "{_escape(artist.description_source_label)}";
-          artistAlbumConfirmForm.artist_origin.value = "{_escape(artist.origin)}";
-          artistAlbumConfirmForm.artist_origin.value = "{_escape(artist.origin)}";
+          artistAlbumConfirmForm.artist_name.value = {_json(artist.name)};
+          artistAlbumConfirmForm.artist_description.value = {_json(artist.description)};
+          artistAlbumConfirmForm.artist_description_source_url.value = {_json(artist.description_source_url)};
+          artistAlbumConfirmForm.artist_description_source_label.value = {_json(artist.description_source_label)};
+          artistAlbumConfirmForm.artist_origin.value = {_json(artist.origin)};
+          artistAlbumConfirmForm.artist_origin.value = {_json(artist.origin)};
           artistAlbumImportStatus.textContent = "";
+          document.getElementById("albumDuplicateWarning").classList.add("hidden");
         }});
         artistAlbumConfirmForm.addEventListener("submit", async (event) => {{
           event.preventDefault();
@@ -1355,8 +1991,12 @@ def render_artist_detail_page(
         // ── Album panel tabs ──────────────────────────────────────────────────
         document.querySelectorAll(".aa-tab").forEach((btn) => {{
           btn.addEventListener("click", () => {{
-            document.querySelectorAll(".aa-tab").forEach((b) => b.classList.remove("active"));
+            document.querySelectorAll(".aa-tab").forEach((b) => {{
+              b.classList.remove("active");
+              b.setAttribute("aria-pressed", "false");
+            }});
             btn.classList.add("active");
+            btn.setAttribute("aria-pressed", "true");
             document.getElementById("aa-tab-import").classList.toggle("hidden", btn.dataset.tab !== "import");
             document.getElementById("aa-tab-manual").classList.toggle("hidden", btn.dataset.tab !== "manual");
           }});
@@ -1390,6 +2030,319 @@ def render_artist_detail_page(
     return _shell(f"{artist.name} | Album Ranker", "artists", body, page_state=state)
 
 
+def render_imports_page(settings: SettingsRecord) -> str:
+    body = """
+      <section class="hero">
+        <div class="eyebrow">Imports</div>
+        <h1>Import an album from a source URL</h1>
+        <p>Paste a Metal Archives album page, review the artist draft when the artist is missing, then save the album in one pass.</p>
+      </section>
+      <section class="panel" style="margin-top:20px;">
+        <div class="panel-title">Album URL Import</div>
+        <form id="albumWithArtistImportForm">
+          <div class="form-field">
+            <label class="form-label" for="albumWithArtistSourceUrl">Source URL</label>
+            <div class="input-clear-wrap">
+              <input id="albumWithArtistSourceUrl" name="source_url" placeholder="https://www.metal-archives.com/albums/..." required>
+              <button type="button" class="input-clear-btn" aria-label="Clear">&#x2715;</button>
+            </div>
+            <div class="muted" style="font-size:0.85em; margin-top:6px;">
+              Use the album page URL, for example https://www.metal-archives.com/albums/For_My_Pain.../Buried_Blue/1391127
+            </div>
+          </div>
+          <div class="row">
+            <button type="submit" id="albumWithArtistSubmitBtn">Create Drafts</button>
+            <button type="button" id="albumWithArtistCancelBtn" class="secondary hidden">Cancel</button>
+            <span class="status" id="albumWithArtistStatus"></span>
+          </div>
+        </form>
+      </section>
+      <section class="panel hidden" id="albumWithArtistReview" style="margin-top:20px;">
+        <div class="panel-title">Review Import Drafts</div>
+        <form id="albumWithArtistConfirmForm">
+          <input type="hidden" id="bundleAlbumDraftId" name="album_draft_id">
+          <input type="hidden" id="bundleArtistDraftId" name="artist_draft_id">
+          <input type="hidden" id="bundleAlbumArtistName" name="album_artist_name">
+          <div id="albumWithArtistExistingNotice" class="hidden" style="margin-bottom:14px; padding:10px 12px; background:rgba(46,168,124,0.12); border:1px solid rgba(46,168,124,0.32); border-radius:6px;">
+            Artist already exists. This import will attach the album to the existing artist.
+          </div>
+          <div id="albumWithArtistArtistDraft" class="draft hidden" style="margin-bottom:16px;">
+            <div class="panel-title">Artist Draft</div>
+            <div class="form-field">
+              <label class="form-label" for="bundleArtistName">Artist Name</label>
+              <input id="bundleArtistName" name="artist_name" required disabled>
+            </div>
+            <div class="form-field">
+              <label class="form-label" for="bundleArtistOrigin">Origin</label>
+              <input id="bundleArtistOrigin" name="artist_origin" placeholder="Country, city or region" disabled>
+            </div>
+            <div class="form-field">
+              <label class="form-label" for="bundleArtistDescription">Description</label>
+              <textarea id="bundleArtistDescription" name="artist_description" placeholder="Description" disabled></textarea>
+            </div>
+            <div class="form-field">
+              <label class="form-label" for="bundleArtistDescriptionSourceUrl">Description Source URL</label>
+              <input id="bundleArtistDescriptionSourceUrl" name="artist_description_source_url" placeholder="https://..." disabled>
+            </div>
+            <div class="form-field">
+              <label class="form-label" for="bundleArtistDescriptionSourceLabel">Description Source Label</label>
+              <input id="bundleArtistDescriptionSourceLabel" name="artist_description_source_label" placeholder="Source label" disabled>
+            </div>
+            <div class="form-field">
+              <label class="form-label" for="bundleArtistExternalUrl">Artist Page URL</label>
+              <input id="bundleArtistExternalUrl" name="artist_external_url" placeholder="https://www.metal-archives.com/bands/..." disabled>
+            </div>
+          </div>
+          <div class="draft">
+            <div class="panel-title">Album Draft</div>
+            <div class="form-field">
+              <label class="form-label" for="bundleAlbumTitle">Album Name</label>
+              <input id="bundleAlbumTitle" name="album_title" required>
+            </div>
+            <div class="grid two">
+              <div class="form-field">
+                <label class="form-label" for="bundleAlbumYear">Year</label>
+                <input id="bundleAlbumYear" name="release_year" placeholder="Year">
+              </div>
+              <div class="form-field">
+                <label class="form-label" for="bundleAlbumDuration">Length</label>
+                <input id="bundleAlbumDuration" name="duration" placeholder="42:18">
+              </div>
+            </div>
+            <div class="grid two">
+              <div class="form-field">
+                <label class="form-label" for="bundleAlbumGenre">Genre</label>
+                <input id="bundleAlbumGenre" name="genre" placeholder="Genre">
+              </div>
+              <div class="form-field">
+                <label class="form-label" for="bundleAlbumType">Type</label>
+                <input id="bundleAlbumType" name="album_type" placeholder="Full-length, EP, Single">
+              </div>
+            </div>
+            <div class="form-field">
+              <label class="form-label" for="bundleAlbumExternalUrl">Album Source URL</label>
+              <input id="bundleAlbumExternalUrl" name="album_external_url" placeholder="https://...">
+            </div>
+            <div class="form-field">
+              <label class="form-label" for="bundleAlbumStreamUrl">Stream URL</label>
+              <input id="bundleAlbumStreamUrl" name="album_stream_url" placeholder="https://...">
+            </div>
+            <div class="form-field">
+              <label class="form-label" for="bundleAlbumCoverUrl">Cover Source URL</label>
+              <input id="bundleAlbumCoverUrl" name="cover_source_url" placeholder="https://...">
+            </div>
+            <div class="form-field">
+              <label class="form-label" for="bundleAlbumNotes">Notes</label>
+              <textarea id="bundleAlbumNotes" name="notes" placeholder="Notes"></textarea>
+            </div>
+            <div class="form-field">
+              <label class="form-label" for="bundleAlbumTracklist">Tracklist</label>
+              <textarea id="bundleAlbumTracklist" name="tracklist_text" rows="8" placeholder="1. Track Name  3:45"></textarea>
+            </div>
+          </div>
+          <div class="row" style="margin-top:14px;">
+            <button type="submit">Confirm Import</button>
+            <button type="button" class="secondary" id="albumWithArtistReset">Clear</button>
+            <span class="status" id="albumWithArtistConfirmStatus"></span>
+          </div>
+        </form>
+      </section>
+      <script>
+        const importForm = document.getElementById("albumWithArtistImportForm");
+        const confirmForm = document.getElementById("albumWithArtistConfirmForm");
+        const reviewPanel = document.getElementById("albumWithArtistReview");
+        const artistDraftPanel = document.getElementById("albumWithArtistArtistDraft");
+        const existingNotice = document.getElementById("albumWithArtistExistingNotice");
+        const status = document.getElementById("albumWithArtistStatus");
+        const confirmStatus = document.getElementById("albumWithArtistConfirmStatus");
+        const bundleArtistFieldIds = [
+          "bundleArtistName",
+          "bundleArtistOrigin",
+          "bundleArtistDescription",
+          "bundleArtistDescriptionSourceUrl",
+          "bundleArtistDescriptionSourceLabel",
+          "bundleArtistExternalUrl",
+        ];
+        let importAbortCtrl = null;
+        const setValue = (id, value) => {
+          const el = document.getElementById(id);
+          if (el) el.value = value ?? "";
+        };
+        const value = (id) => (document.getElementById(id)?.value || "").trim();
+        function setArtistDraftEnabled(enabled) {
+          bundleArtistFieldIds.forEach((id) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.disabled = !enabled;
+            if (!enabled) el.value = "";
+          });
+          document.getElementById("bundleArtistName").required = enabled;
+        }
+        document.querySelectorAll(".input-clear-wrap").forEach((wrap) => {
+          const input = wrap.querySelector("input");
+          const btn = wrap.querySelector(".input-clear-btn");
+          const sync = () => { btn.style.display = input.value ? "block" : "none"; };
+          input.addEventListener("input", sync);
+          btn.addEventListener("click", () => { input.value = ""; input.dispatchEvent(new Event("input")); input.focus(); });
+          sync();
+        });
+        function fillBundleDrafts(response) {
+          const albumDraft = response.album_draft;
+          const album = albumDraft.draft_payload || {};
+          const artistDraft = response.artist_draft;
+          setValue("bundleAlbumDraftId", albumDraft.id);
+          setValue("bundleArtistDraftId", artistDraft ? artistDraft.id : "");
+          existingNotice.classList.toggle("hidden", !response.artist_exists);
+          artistDraftPanel.classList.toggle("hidden", !artistDraft);
+          setArtistDraftEnabled(Boolean(artistDraft));
+          let artistGenre = "";
+          if (artistDraft) {
+            const artist = artistDraft.draft_payload || {};
+            artistGenre = artist.genre || "";
+            setValue("bundleArtistName", artist.artist_name || album.artist_name || "");
+            setValue("bundleArtistOrigin", artist.origin || "");
+            setValue("bundleArtistDescription", artist.description || "");
+            setValue("bundleArtistDescriptionSourceUrl", artist.description_source_url || artistDraft.chosen_source_url || response.artist_source_url || "");
+            setValue("bundleArtistDescriptionSourceLabel", artist.description_source_label || "");
+            setValue("bundleArtistExternalUrl", artist.external_url || response.artist_source_url || "");
+          }
+          setValue("bundleAlbumArtistName", album.artist_name || "");
+          setValue("bundleAlbumTitle", album.album_title || "");
+          setValue("bundleAlbumYear", album.release_year || "");
+          setValue("bundleAlbumDuration", formatDuration(album.duration_seconds));
+          setValue("bundleAlbumGenre", album.genre || artistGenre || "");
+          setValue("bundleAlbumType", album.album_type || "");
+          setValue("bundleAlbumExternalUrl", album.album_external_url || "");
+          setValue("bundleAlbumStreamUrl", album.album_stream_url || "");
+          setValue("bundleAlbumCoverUrl", album.cover_source_url || "");
+          setValue("bundleAlbumNotes", album.notes || "");
+          setValue("bundleAlbumTracklist", (album.tracks || []).map((track) => `${track.track_number}. ${track.title}${track.duration_seconds ? "  " + formatDuration(track.duration_seconds) : ""}`).join("\\n"));
+          reviewPanel.classList.remove("hidden");
+          reviewPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        function artistPayload() {
+          if (!value("bundleArtistDraftId")) return null;
+          return {
+            name: value("bundleArtistName"),
+            description: value("bundleArtistDescription") || null,
+            description_source_url: value("bundleArtistDescriptionSourceUrl") || null,
+            description_source_label: value("bundleArtistDescriptionSourceLabel") || null,
+            external_url: value("bundleArtistExternalUrl") || null,
+            origin: value("bundleArtistOrigin") || null,
+          };
+        }
+        function albumPayload() {
+          const artistName = value("bundleArtistDraftId")
+            ? value("bundleArtistName")
+            : value("bundleAlbumArtistName");
+          return {
+            artist_name: artistName,
+            artist_description: value("bundleArtistDescription") || null,
+            artist_description_source_url: value("bundleArtistDescriptionSourceUrl") || null,
+            artist_description_source_label: value("bundleArtistDescriptionSourceLabel") || null,
+            album_external_url: value("bundleAlbumExternalUrl") || null,
+            album_stream_url: value("bundleAlbumStreamUrl") || null,
+            album_type: value("bundleAlbumType") || null,
+            title: value("bundleAlbumTitle"),
+            release_year: value("bundleAlbumYear") ? Number(value("bundleAlbumYear")) : null,
+            genre: value("bundleAlbumGenre") || null,
+            rating: null,
+            duration_seconds: parseDuration(value("bundleAlbumDuration")),
+            cover_image_path: null,
+            cover_source_url: value("bundleAlbumCoverUrl") || null,
+            notes: value("bundleAlbumNotes") || null,
+            tracks: parseTracklist(document.getElementById("bundleAlbumTracklist")?.value || ""),
+          };
+        }
+        document.getElementById("albumWithArtistCancelBtn").addEventListener("click", () => {
+          if (importAbortCtrl) {
+            importAbortCtrl.abort();
+            importAbortCtrl = null;
+          }
+        });
+        document.getElementById("albumWithArtistReset").addEventListener("click", () => {
+          confirmForm.reset();
+          reviewPanel.classList.add("hidden");
+          artistDraftPanel.classList.add("hidden");
+          setArtistDraftEnabled(false);
+          existingNotice.classList.add("hidden");
+          status.textContent = "";
+          confirmStatus.textContent = "";
+        });
+        importForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const submitBtn = document.getElementById("albumWithArtistSubmitBtn");
+          const cancelBtn = document.getElementById("albumWithArtistCancelBtn");
+          const sourceUrl = document.getElementById("albumWithArtistSourceUrl").value.trim();
+          const albumUrlMessage = "Please provide a proper Metal Archives album URL from /albums/..., not an artist page URL.";
+          if (!sourceUrl) {
+            status.textContent = albumUrlMessage;
+            return;
+          }
+          try {
+            const parsed = new URL(sourceUrl);
+            if (parsed.hostname.includes("metal-archives.com") && !parsed.pathname.startsWith("/albums/")) {
+              status.textContent = albumUrlMessage;
+              return;
+            }
+          } catch (err) {
+            status.textContent = albumUrlMessage;
+            return;
+          }
+          importAbortCtrl = new AbortController();
+          submitBtn.disabled = true;
+          cancelBtn.classList.remove("hidden");
+          status.textContent = "Creating drafts...";
+          try {
+            const response = await fetchJson("/api/import/album-with-artist", {
+              method: "POST",
+              signal: importAbortCtrl.signal,
+              body: JSON.stringify({
+                artist_name: "",
+                album_title: null,
+                source_url: sourceUrl,
+              }),
+            });
+            fillBundleDrafts(response);
+            status.textContent = response.artist_draft ? "Album and artist drafts ready." : "Album draft ready.";
+          } catch (err) {
+            status.textContent = err.name === "AbortError" ? "Cancelled." : (err.message || "Import failed.");
+          } finally {
+            importAbortCtrl = null;
+            submitBtn.disabled = false;
+            cancelBtn.classList.add("hidden");
+          }
+        });
+        confirmForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          confirmStatus.textContent = "Saving import...";
+          try {
+            const result = await fetchJson("/api/import/album-with-artist/confirm", {
+              method: "POST",
+              body: JSON.stringify({
+                album_draft_id: Number(value("bundleAlbumDraftId")),
+                album_payload: albumPayload(),
+                album_chosen_source_url: value("bundleAlbumExternalUrl") || null,
+                artist_draft_id: value("bundleArtistDraftId") ? Number(value("bundleArtistDraftId")) : null,
+                artist_payload: artistPayload(),
+                artist_chosen_source_url: value("bundleArtistExternalUrl") || null,
+              }),
+            });
+            if (result?.album?.id) {
+              window.location.href = `/albums/${result.album.id}`;
+            } else {
+              window.location.href = "/albums";
+            }
+          } catch (err) {
+            confirmStatus.textContent = err.message || "Save failed.";
+          }
+        });
+      </script>
+    """
+    state = {"settings": settings.model_dump(), "album_detail_link": "/albums"}
+    return _shell("Imports | Album Ranker", "imports", body, page_state=state)
+
+
 def render_albums_page(
     settings: SettingsRecord,
     albums: list[AlbumCardRecord],
@@ -1397,7 +2350,15 @@ def render_albums_page(
     genres: list[GenreRecord],
     imports: list[ImportDraftRecord],
 ) -> str:
-    albums_markup = "".join(_album_card_markup(album) for album in albums) or '<p class="muted">No albums yet.</p>'
+    recent_albums = sorted(albums, key=lambda album: (album.created_at, album.id), reverse=True)
+    albums_markup = "".join(
+        _album_card_markup(
+            album,
+            extra_class="hidden" if index >= 20 else "",
+            extra_attrs=f'data-recent-index="{index}"',
+        )
+        for index, album in enumerate(recent_albums)
+    ) or '<p class="muted">No albums yet.</p>'
     genre_options = "".join(
         f'<option value="{_escape(genre.name)}">{_escape(genre.name)}</option>'
         for genre in genres
@@ -1407,7 +2368,7 @@ def render_albums_page(
         for year in sorted({album.release_year for album in albums if album.release_year}, reverse=True)
     )
     artist_options = "".join(
-        f'<option value="{_escape(artist.name)}">{_escape(artist.name)}</option>'
+        f'<option value="{_escape(artist.name)}">'
         for artist in artists
     )
     body = f"""
@@ -1419,41 +2380,43 @@ def render_albums_page(
       <section class="panel" style="margin-top:20px;">
         <div class="panel-title">Filters</div>
         <div class="filters">
-          <input id="albumSearch" type="search" placeholder="Search title or artist…" style="min-width:180px;">
           <select id="genreFilter"><option value="">Genre</option>{genre_options}</select>
           <select id="yearFilter"><option value="">Year</option>{year_options}</select>
-          <select id="artistFilter"><option value="">Artist</option>{artist_options}</select>
+          <input id="artistFilter" type="search" list="artistDatalist" placeholder="Artist…" autocomplete="off">
+          <datalist id="artistDatalist">{artist_options}</datalist>
         </div>
       </section>
       <section class="panel" style="margin-top:20px;">
         <div class="panel-title">Album Library</div>
+        {('<p id="albumRecentHint" class="muted" style="margin-top:0;">Showing the 20 most recently added albums. Use filters to search the full library.</p>' if len(albums) > 20 else '')}
         <div id="albumGrid" class="album-grid">{albums_markup}</div>
       </section>
       <script>
         (function () {{
           const cards = Array.from(document.querySelectorAll("#albumGrid .album-card"));
-          const searchEl  = document.getElementById("albumSearch");
           const genreEl   = document.getElementById("genreFilter");
           const yearEl    = document.getElementById("yearFilter");
           const artistEl  = document.getElementById("artistFilter");
           function applyFilters() {{
-            const q      = searchEl.value.trim().toLowerCase();
             const genre  = genreEl.value;
             const year   = yearEl.value;
-            const artist = artistEl.value;
+            const artist = artistEl.value.trim().toLowerCase();
+            const hasFilter = Boolean(genre || year || artist);
             cards.forEach(card => {{
-              const matchQ = !q ||
-                card.dataset.title.toLowerCase().includes(q) ||
-                card.dataset.artist.toLowerCase().includes(q);
+              const recentIndex = Number(card.dataset.recentIndex || 0);
               card.classList.toggle("hidden",
-                !matchQ ||
                 (genre  && !card.dataset.genre.toLowerCase().includes(genre.toLowerCase())) ||
                 (year   && card.dataset.year !== year) ||
-                (artist && card.dataset.artist !== artist)
+                (artist && !card.dataset.artist.toLowerCase().includes(artist)) ||
+                (!hasFilter && recentIndex >= 20)
               );
             }});
+            const hint = document.getElementById("albumRecentHint");
+            if (hint) {{
+              hint.classList.toggle("hidden", hasFilter);
+            }}
           }}
-          [searchEl, genreEl, yearEl, artistEl].forEach(el => {{
+          [genreEl, yearEl, artistEl].forEach(el => {{
             el.addEventListener(el.tagName === "INPUT" ? "input" : "change", applyFilters);
           }});
         }})();
@@ -1461,6 +2424,33 @@ def render_albums_page(
     """
     state = {"settings": settings.model_dump(), "album_detail_link": "/albums"}
     return _shell("Albums | Album Ranker", "albums", body, page_state=state)
+
+
+def render_bookmarks_page(settings: SettingsRecord, albums: list[AlbumCardRecord]) -> str:
+    albums_markup = "".join(
+        _album_card_markup(
+            album,
+            include_bookmark_action=False,
+            include_listened_action=True,
+            remove_on_listened=True,
+        )
+        for album in albums
+    )
+    empty_class = "" if not albums else "hidden"
+    body = f"""
+      <section class="hero">
+        <div class="eyebrow">Bookmarks</div>
+        <h1>Albums saved for later listening</h1>
+        <p>Keep a focused queue of records you still need to finish. Mark an album listened when you are done and it leaves this page without leaving your library.</p>
+      </section>
+      <section class="panel" style="margin-top:20px;">
+        <div class="panel-title">Listen Later</div>
+        <p id="bookmarkEmpty" class="muted {empty_class}">No bookmarked albums yet. <a href="/albums">Browse albums</a> to build a listening queue.</p>
+        <div id="bookmarkGrid" class="album-grid">{albums_markup}</div>
+      </section>
+    """
+    state = {"settings": settings.model_dump(), "album_detail_link": "/albums"}
+    return _shell("Bookmarks | Album Ranker", "bookmarks", body, page_state=state)
 
 
 def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord) -> str:
@@ -1478,6 +2468,8 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
         for i in range(1, 11)
     )
     star_initial_label = f"{album.rating}/10" if album.rating else "Rate this album"
+    cover_action_label = "Change cover" if album.cover_image_path else "Upload cover"
+    cover_action_title = "Click to change the cover image" if album.cover_image_path else "Click to upload a cover image"
     body = f"""
       <section class="hero">
         <div class="eyebrow">Album Details</div>
@@ -1486,9 +2478,9 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
       </section>
       <section class="detail-layout">
         <div>
-          <label class="cover" for="coverFileInput" title="Click to upload a cover image">
+          <label class="cover" for="coverFileInput" title="{cover_action_title}">
             <img id="coverImg" src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover">
-            <div class="cover-upload-overlay">&#128247; Upload cover</div>
+            <div class="cover-upload-overlay" id="coverUploadOverlay">&#128247; {cover_action_label}</div>
           </label>
           <input type="file" id="coverFileInput" accept="image/jpeg,image/png,image/webp" style="display:none;">
           <div class="star-widget">
@@ -1498,37 +2490,60 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           </div>
           {('<div class="row" style="margin-top:10px;gap:8px;justify-content:center;">' + (f'<a class="tag" href="{_escape(album.album_external_url)}" target="_blank" rel="noopener noreferrer">Source</a>' if album.album_external_url else '') + (f'<a class="tag" href="{_escape(album.album_stream_url)}" target="_blank" rel="noopener noreferrer">&#9654; Play</a>' if album.album_stream_url else '') + '</div>') if album.album_external_url or album.album_stream_url else ''}
           <div class="meta-stack">
+            <div class="row" style="gap:8px; margin-bottom:8px;">
+              {_album_detail_listen_action(album)}
+            </div>
+            <div class="status album-listened-state" data-album-id="{album.id}" style="text-align:center;">{"Listened" if album.listened_at else ("Bookmarked" if album.bookmarked_at else "")}</div>
             <button type="button" id="albumEditToggle" class="secondary" style="width:100%; margin-bottom:8px;">Edit Album Metadata</button>
-            <div class="meta-item">
-              <span class="meta-item-label">Length</span>
-              {_escape(seconds_to_display(album.duration_seconds) or 'Unknown length')}
+            <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px;">
+              <button type="button" id="albumRefreshBtn" class="secondary" style="width:100%;" title="Re-fetch metadata from source URL using AI">&#8635; Refresh Metadata</button>
             </div>
-            <div class="meta-item">
-              <span class="meta-item-label">Genre</span>
-              {_escape(album.genre or 'Unknown genre')}
+            <div id="albumRefreshSourcePanel" class="hidden" style="margin-bottom:4px;">
+              <input id="albumRefreshUrlInput" placeholder="https://..." value="{_escape(album.album_external_url)}" style="font-size:0.82em; padding:5px 8px; margin-bottom:4px;">
+              <div style="display:flex; gap:4px; align-items:center;">
+                <button type="button" id="albumRefreshGenerateBtn" style="white-space:nowrap; flex:1 1 auto;">Generate Draft</button>
+                <button type="button" id="albumRefreshCancelBtn" class="secondary" style="white-space:nowrap; flex:0 0 auto;">Cancel</button>
+              </div>
             </div>
-            <div class="meta-item">
-              <span class="meta-item-label">Type</span>
-              {_escape(album.album_type or 'Unknown type')}
+            <div id="albumRefreshProgress" style="display:none; margin-bottom:4px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
+              <div id="albumRefreshBar" style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
             </div>
+            <div class="status" id="albumRefreshStatus" style="text-align:center; font-size:0.85em; margin-bottom:4px;"></div>
+            <button type="button" id="albumDeleteButton" class="danger" style="width:100%; margin-bottom:8px;">Delete Album</button>
           </div>
         </div>
         <div class="grid" style="align-self:start; margin-top:0;">
           <section class="panel">
             <div class="panel-title">Tracklist</div>
             <div class="tracklist">{track_rows}</div>
+            <div style="margin-top:12px; display:flex; flex-direction:column; gap:4px;">
+              <div class="meta-item">
+                <span class="meta-item-label">Length</span>
+                {_escape(seconds_to_display(album.duration_seconds) or 'Unknown length')}
+              </div>
+              <div class="meta-item">
+                <span class="meta-item-label">Genre</span>
+                {_escape(album.genre or 'Unknown genre')}
+              </div>
+              <div class="meta-item">
+                <span class="meta-item-label">Type</span>
+                {_escape(album.album_type or 'Unknown type')}
+              </div>
+            </div>
           </section>
           <section class="panel hidden" id="albumEditPanel">
             <div class="detail-head">
               <div class="panel-title" style="margin-bottom:0;">Edit Album</div>
-              <button type="button" id="albumDeleteButton" class="danger">Delete Album</button>
             </div>
             <form id="albumDetailForm">
               <input type="hidden" name="cover_image_path" id="coverImagePathField" value="{_escape(album.cover_image_path or '')}">
               <input type="hidden" name="cover_source_url" value="{_escape(album.cover_source_url)}">
               <input type="hidden" name="artist_description_source_url" value="{_escape(album.artist_description_source_url)}">
               <input type="hidden" name="artist_description_source_label" value="{_escape(album.artist_description_source_label)}">
-              <input type="hidden" name="album_external_url" value="{_escape(album.album_external_url)}">
+              <div class="form-field">
+                <label class="form-label" for="albumEditExternalUrl">Source URL</label>
+                <input id="albumEditExternalUrl" name="album_external_url" value="{_escape(album.album_external_url)}" placeholder="https://www.metal-archives.com/albums/...">
+              </div>
               <input type="hidden" name="artist_name" value="{_escape(album.artist_name)}">
               <input type="hidden" name="artist_origin" value="{_escape(album.artist_origin or '')}">
               <div class="form-field">
@@ -1541,13 +2556,13 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
                   <input id="albumEditYear" name="release_year" value="{_escape(str(album.release_year or ''))}" placeholder="Year">
                 </div>
                 <div class="form-field">
-                  <label class="form-label" for="albumEditGenre">Genre</label>
-                  <input id="albumEditGenre" name="genre" value="{_escape(album.genre)}" placeholder="Genre">
-                </div>
-                <div class="form-field">
                   <label class="form-label" for="albumEditDuration">Length</label>
                   <input id="albumEditDuration" name="duration" value="{_escape(seconds_to_display(album.duration_seconds))}" placeholder="Length">
                 </div>
+              </div>
+              <div class="form-field">
+                <label class="form-label" for="albumEditGenre">Genre</label>
+                <input id="albumEditGenre" name="genre" value="{_escape(album.genre)}" placeholder="Genre">
               </div>
               <div class="form-field">
                 <label class="form-label" for="albumEditStreamUrl">Stream URL</label>
@@ -1578,12 +2593,88 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           </section>
         </div>
       </section>
+      <section class="panel hidden" id="albumRefreshReview" style="margin-top:16px; max-width:884px;">
+        <div class="panel-title">Review Refreshed Metadata</div>
+        <form id="albumRefreshForm">
+          <input type="hidden" name="draft_id" id="albumRefreshDraftId">
+          <div class="form-field">
+            <label class="form-label">Title</label>
+            <input name="title" id="albumRefreshTitle">
+          </div>
+          <div class="row">
+            <div class="form-field">
+              <label class="form-label">Year</label>
+              <input name="release_year" id="albumRefreshYear" placeholder="Year">
+            </div>
+            <div class="form-field">
+              <label class="form-label">Length</label>
+              <input name="duration" id="albumRefreshDuration" placeholder="e.g. 42:18">
+            </div>
+          </div>
+          <div class="form-field">
+            <label class="form-label">Genre</label>
+            <input name="genre" id="albumRefreshGenre" placeholder="Genre">
+          </div>
+          <div class="form-field">
+            <label class="form-label">Type</label>
+            <input name="album_type" id="albumRefreshType" placeholder="e.g. Full-length, EP">
+          </div>
+          <div class="form-field">
+            <label class="form-label">Cover Source URL</label>
+            <input name="cover_source_url" id="albumRefreshCoverUrl" placeholder="https://...">
+          </div>
+          <div class="form-field">
+            <label class="form-label">Notes</label>
+            <textarea name="notes" id="albumRefreshNotes" placeholder="Notes"></textarea>
+          </div>
+          <div class="form-field">
+            <label class="form-label">Tracklist</label>
+            <textarea name="tracklist_text" id="albumRefreshTracklist" rows="6" placeholder="1. Track Name  3:45"></textarea>
+          </div>
+          <div class="row">
+            <button type="submit">Apply Changes</button>
+            <button type="button" class="secondary" id="albumRefreshReject">Reject</button>
+            <span class="status" id="albumRefreshApplyStatus"></span>
+          </div>
+        </form>
+      </section>
       <section class="panel" style="margin-top:16px; max-width:884px;">
         <div class="panel-title">{_escape(description_title)}</div>
+        {f'<a class="tag" href="{_escape(description_source_url)}" target="_blank" rel="noreferrer" style="flex:0 0 auto;">{_escape(description_source_label)}</a>' if description_source_url else ''}
         <div id="albumArtistDescription" class="clamp">{description_text}</div>
         <div class="row" style="margin-top:8px;">
           <button type="button" class="toggle-link" data-toggle-clamp="albumArtistDescription" style="flex:0 0 auto;">MORE</button>
-          {f'<a class="tag" href="{_escape(description_source_url)}" target="_blank" rel="noreferrer" style="flex:0 0 auto;">{_escape(description_source_label)}</a>' if description_source_url else ''}
+        </div>
+      </section>
+      <section class="panel" style="margin-top:16px; max-width:884px;">
+        <div class="detail-head" style="margin-bottom:0;">
+          <div class="panel-title" style="margin-bottom:0;">Overview</div>
+          <div class="row" style="gap:8px; align-items:center;">
+            <label style="font-size:0.85em; color:var(--muted); display:flex; align-items:center; gap:4px; cursor:pointer;">
+              <input type="radio" name="overviewLang" value="en" {"checked" if True else ""}> English
+            </label>
+            <label style="font-size:0.85em; color:var(--muted); display:flex; align-items:center; gap:4px; cursor:pointer;">
+              <input type="radio" name="overviewLang" value="ru"> Russian
+            </label>
+            <button type="button" id="overviewGenerateBtn" class="secondary" style="flex:0 0 auto; font-size:0.85em;">{"✦ Regenerate" if album.overview else "✦ Generate Overview"}</button>
+            <button type="button" id="overviewCancelBtn" class="secondary hidden" style="flex:0 0 auto; font-size:0.85em;">Cancel</button>
+          </div>
+        </div>
+        <div id="overviewProgress" style="display:none; margin:8px 0 4px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
+          <div style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
+        </div>
+        <div class="status" id="overviewStatus" style="font-size:0.85em; margin-top:6px;"></div>
+        {(f'<div id="overviewDisplay" style="white-space:pre-wrap; font-size:0.95em; line-height:1.6; margin-top:12px;">{_render_overview(album.overview)}</div>') if album.overview else '<div id="overviewDisplay" style="display:none; white-space:pre-wrap; font-size:0.95em; line-height:1.6; margin-top:12px;"></div>'}
+      </section>
+      <section class="panel hidden" id="overviewDraftPanel" style="margin-top:16px; max-width:884px;">
+        <div class="panel-title">Review Generated Overview</div>
+        <div class="form-field">
+          <textarea id="overviewDraftText" rows="14" style="font-family:inherit; font-size:0.92em; line-height:1.6;"></textarea>
+        </div>
+        <div class="row">
+          <button type="button" id="overviewSaveBtn">Save Overview</button>
+          <button type="button" class="secondary" id="overviewRejectBtn">Reject</button>
+          <span class="status" id="overviewSaveStatus"></span>
         </div>
       </section>
       <script>
@@ -1623,6 +2714,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
         (function() {{
           const coverFileInput = document.getElementById("coverFileInput");
           const coverImg = document.getElementById("coverImg");
+          const coverUploadOverlay = document.getElementById("coverUploadOverlay");
           coverFileInput.addEventListener("change", async () => {{
             const file = coverFileInput.files[0];
             if (!file) return;
@@ -1635,6 +2727,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               if (data.cover_image_path) {{
                 const name = data.cover_image_path.split("/").pop();
                 coverImg.src = "/library-data/covers/" + name + "?t=" + Date.now();
+                if (coverUploadOverlay) coverUploadOverlay.textContent = "Change cover";
                 const pathField = document.getElementById("coverImagePathField");
                 if (pathField) pathField.value = data.cover_image_path;
               }}
@@ -1661,8 +2754,122 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           albumEditPanel.classList.add("hidden");
           syncAlbumEditToggle();
         }});
+        (function() {{
+          const btn = document.getElementById('albumRefreshBtn');
+          const generateBtn = document.getElementById('albumRefreshGenerateBtn');
+          const cancelBtn = document.getElementById('albumRefreshCancelBtn');
+          const status = document.getElementById('albumRefreshStatus');
+          const progress = document.getElementById('albumRefreshProgress');
+          const urlInput = document.getElementById('albumRefreshUrlInput');
+          const sourcePanel = document.getElementById('albumRefreshSourcePanel');
+          const reviewPanel = document.getElementById('albumRefreshReview');
+          const refreshForm = document.getElementById('albumRefreshForm');
+          let abortCtrl = null;
+          function setSourcePanelOpen(isOpen) {{
+            sourcePanel.classList.toggle('hidden', !isOpen);
+            if (isOpen) urlInput.focus();
+          }}
+          function resetRefreshUI() {{
+            progress.style.display = 'none';
+            btn.disabled = false;
+            generateBtn.disabled = false;
+            urlInput.disabled = false;
+            generateBtn.textContent = 'Generate Draft';
+            cancelBtn.textContent = 'Cancel';
+            abortCtrl = null;
+          }}
+          cancelBtn.addEventListener('click', () => {{
+            if (abortCtrl) {{
+              abortCtrl.abort();
+              setSourcePanelOpen(false);
+              return;
+            }}
+            setSourcePanelOpen(false);
+            status.textContent = '';
+          }});
+          document.getElementById('albumRefreshReject').addEventListener('click', () => {{
+            reviewPanel.classList.add('hidden');
+            status.textContent = '';
+            setSourcePanelOpen(false);
+          }});
+          btn.addEventListener('click', () => {{
+            setSourcePanelOpen(true);
+          }});
+          generateBtn.addEventListener('click', async () => {{
+            const sourceUrl = urlInput ? urlInput.value.trim() : null;
+            abortCtrl = new AbortController();
+            btn.disabled = true;
+            generateBtn.disabled = true;
+            urlInput.disabled = true;
+            generateBtn.textContent = 'Generating\u2026';
+            cancelBtn.textContent = 'Cancel';
+            status.textContent = 'Fetching source and generating metadata\u2026';
+            progress.style.display = 'block';
+            reviewPanel.classList.add('hidden');
+            try {{
+              const resp = await fetchJson('/api/import/album', {{
+                method: 'POST',
+                signal: abortCtrl.signal,
+                body: JSON.stringify({{ artist_name: {_json(album.artist_name)}, album_title: {_json(album.title)}, source_url: sourceUrl || {_json(album.album_external_url)} }}),
+              }});
+              const draft = resp.draft;
+              const p = draft.draft_payload;
+              document.getElementById('albumRefreshDraftId').value = draft.id;
+              document.getElementById('albumRefreshTitle').value = p.album_title || '';
+              document.getElementById('albumRefreshYear').value = p.release_year || '';
+              document.getElementById('albumRefreshDuration').value = p.duration_seconds ? formatDuration(p.duration_seconds) : '';
+              document.getElementById('albumRefreshGenre').value = p.genre || '';
+              document.getElementById('albumRefreshType').value = p.album_type || '';
+              document.getElementById('albumRefreshCoverUrl').value = p.cover_source_url || '';
+              document.getElementById('albumRefreshNotes').value = p.notes || '';
+              document.getElementById('albumRefreshTracklist').value = (p.tracks || []).map(t => `${{t.track_number}}. ${{t.title}}${{t.duration_seconds ? '  ' + formatDuration(t.duration_seconds) : ''}}`).join('\\n');
+              resetRefreshUI();
+              setSourcePanelOpen(false);
+              status.textContent = 'Draft ready \u2014 review below.';
+              reviewPanel.classList.remove('hidden');
+              reviewPanel.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+            }} catch (err) {{
+              resetRefreshUI();
+              status.textContent = err.name === 'AbortError' ? 'Cancelled.' : (err.message || 'Refresh failed.');
+            }}
+          }});
+          refreshForm.addEventListener('submit', async (e) => {{
+            e.preventDefault();
+            const applyStatus = document.getElementById('albumRefreshApplyStatus');
+            applyStatus.textContent = 'Saving\u2026';
+            try {{
+              await fetchJson('/api/albums/{album.id}', {{
+                method: 'PUT',
+                body: JSON.stringify({{
+                  artist_name: {_json(album.artist_name)},
+                  artist_description: {_json(album.artist_description)},
+                  artist_description_source_url: {_json(album.artist_description_source_url)},
+                  artist_description_source_label: {_json(album.artist_description_source_label)},
+                  artist_origin: {_json(album.artist_origin)},
+                  title: document.getElementById('albumRefreshTitle').value.trim(),
+                  release_year: document.getElementById('albumRefreshYear').value.trim() ? Number(document.getElementById('albumRefreshYear').value.trim()) : null,
+                  duration_seconds: parseDuration(document.getElementById('albumRefreshDuration').value),
+                  genre: document.getElementById('albumRefreshGenre').value.trim() || null,
+                  album_type: document.getElementById('albumRefreshType').value.trim() || null,
+                  cover_source_url: document.getElementById('albumRefreshCoverUrl').value.trim() || null,
+                  cover_image_path: {_json(album.cover_image_path)},
+                  album_external_url: {_json(album.album_external_url)},
+                  album_stream_url: {_json(album.album_stream_url)},
+                  rating: {_json(album.rating)},
+                  notes: document.getElementById('albumRefreshNotes').value.trim() || null,
+                  tracks: parseTracklist(document.getElementById('albumRefreshTracklist').value),
+                }}),
+              }});
+              applyStatus.textContent = '\u2713 Saved \u2014 reloading\u2026';
+              setSourcePanelOpen(false);
+              window.location.reload();
+            }} catch (err) {{
+              applyStatus.textContent = err.message || 'Save failed.';
+            }}
+          }});
+        }})();
         albumDeleteButton.addEventListener("click", async () => {{
-          if (!window.confirm(`Delete {_escape(album.artist_name)} - {_escape(album.title)}?`)) return;
+          if (!window.confirm(`Delete ${{{_json(album.artist_name)}}} - ${{{_json(album.title)}}}?`)) return;
           const status = document.getElementById("albumDetailStatus");
           try {{
             status.textContent = "Deleting...";
@@ -1705,6 +2912,76 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             status.textContent = error.message;
           }}
         }});
+        (function() {{
+          const generateBtn = document.getElementById('overviewGenerateBtn');
+          const cancelBtn = document.getElementById('overviewCancelBtn');
+          const progress = document.getElementById('overviewProgress');
+          const statusEl = document.getElementById('overviewStatus');
+          const draftPanel = document.getElementById('overviewDraftPanel');
+          const draftText = document.getElementById('overviewDraftText');
+          const saveBtn = document.getElementById('overviewSaveBtn');
+          const rejectBtn = document.getElementById('overviewRejectBtn');
+          const saveStatus = document.getElementById('overviewSaveStatus');
+          const display = document.getElementById('overviewDisplay');
+          let abortCtrl = null;
+
+          function resetGenerateUI() {{
+            progress.style.display = 'none';
+            generateBtn.disabled = false;
+            generateBtn.classList.remove('hidden');
+            cancelBtn.classList.add('hidden');
+            abortCtrl = null;
+          }}
+
+          cancelBtn.addEventListener('click', () => {{
+            if (abortCtrl) abortCtrl.abort();
+          }});
+
+          generateBtn.addEventListener('click', async () => {{
+            const lang = document.querySelector('input[name="overviewLang"]:checked')?.value || 'en';
+            abortCtrl = new AbortController();
+            generateBtn.classList.add('hidden');
+            cancelBtn.classList.remove('hidden');
+            statusEl.textContent = 'Generating overview\u2026';
+            progress.style.display = 'block';
+            draftPanel.classList.add('hidden');
+            try {{
+              const resp = await fetchJson('/api/albums/{album.id}/overview/draft', {{
+                method: 'POST',
+                signal: abortCtrl.signal,
+                body: JSON.stringify({{ language: lang }}),
+              }});
+              draftText.value = resp.overview || '';
+              resetGenerateUI();
+              statusEl.textContent = 'Draft ready \u2014 review below.';
+              draftPanel.classList.remove('hidden');
+              draftPanel.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+            }} catch (err) {{
+              resetGenerateUI();
+              statusEl.textContent = err.name === 'AbortError' ? 'Cancelled.' : (err.message || 'Generation failed.');
+            }}
+          }});
+
+          rejectBtn.addEventListener('click', () => {{
+            draftPanel.classList.add('hidden');
+            statusEl.textContent = '';
+          }});
+
+          saveBtn.addEventListener('click', async () => {{
+            saveStatus.textContent = 'Saving\u2026';
+            const text = draftText.value.trim() || null;
+            try {{
+              await fetchJson('/api/albums/{album.id}/overview', {{
+                method: 'PATCH',
+                body: JSON.stringify({{ overview: text }}),
+              }});
+              saveStatus.textContent = '\u2713 Saved \u2014 reloading\u2026';
+              window.location.reload();
+            }} catch (err) {{
+              saveStatus.textContent = err.message || 'Save failed.';
+            }}
+          }});
+        }})();
       </script>
     """
     state = {"settings": settings.model_dump(), "album_detail_link": f"/albums/{album.id}"}
@@ -2160,6 +3437,9 @@ def render_genres_page(settings: SettingsRecord, genres: list[GenreRecord]) -> s
               <button type="button" class="secondary" id="genreReset">New</button>
               <span class="status" id="genreStatus"></span>
             </div>
+            <div id="genreDuplicateWarning" class="hidden" style="margin-top:10px; padding:10px 12px; background:rgba(255,200,0,0.1); border:1px solid rgba(255,200,0,0.3); border-radius:6px; font-size:0.88em; color:var(--ink);">
+              A genre named <strong id="genreDuplicateName"></strong> already exists. Saving will create a duplicate.
+            </div>
           </form>
         </section>
         <section class="panel">
@@ -2189,7 +3469,28 @@ def render_genres_page(settings: SettingsRecord, genres: list[GenreRecord]) -> s
           form.reset();
           form.genre_id.value = "";
           document.getElementById("genreStatus").textContent = "";
+          document.getElementById("genreDuplicateWarning").classList.add("hidden");
         }});
+        // ── Genre duplicate detection ─────────────────────────────────────────
+        (function() {{
+          const nameInput = document.getElementById("genreName");
+          const warning = document.getElementById("genreDuplicateWarning");
+          const dupName = document.getElementById("genreDuplicateName");
+          const form = document.getElementById("genreForm");
+          nameInput.addEventListener("input", () => {{
+            const val = nameInput.value.trim().toLowerCase();
+            const currentId = form.genre_id.value.trim();
+            const match = val && Array.from(document.querySelectorAll(".edit-genre")).find(btn => {{
+              return btn.dataset.genreName.trim().toLowerCase() === val && btn.dataset.genreId !== currentId;
+            }});
+            if (match) {{
+              dupName.textContent = match.dataset.genreName;
+              warning.classList.remove("hidden");
+            }} else {{
+              warning.classList.add("hidden");
+            }}
+          }});
+        }})();
         document.querySelectorAll(".edit-genre").forEach((button) => {{
           button.addEventListener("click", () => {{
             const form = document.getElementById("genreForm");

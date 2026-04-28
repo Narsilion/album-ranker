@@ -74,6 +74,8 @@ class Database:
                     album_stream_url TEXT,
                     album_type TEXT,
                     notes TEXT,
+                    bookmarked_at TEXT,
+                    listened_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(artist_id) REFERENCES artists(id) ON DELETE CASCADE
@@ -156,6 +158,12 @@ class Database:
                 connection.execute("ALTER TABLE album_lists ADD COLUMN is_auto INTEGER NOT NULL DEFAULT 0")
             if "auto_limit" not in list_columns:
                 connection.execute("ALTER TABLE album_lists ADD COLUMN auto_limit INTEGER")
+            if "overview" not in album_columns:
+                connection.execute("ALTER TABLE albums ADD COLUMN overview TEXT")
+            if "bookmarked_at" not in album_columns:
+                connection.execute("ALTER TABLE albums ADD COLUMN bookmarked_at TEXT")
+            if "listened_at" not in album_columns:
+                connection.execute("ALTER TABLE albums ADD COLUMN listened_at TEXT")
 
     @contextmanager
     def connection(self) -> sqlite3.Connection:
@@ -399,6 +407,19 @@ class Database:
             ).fetchall()
         return [self._album_card_from_row(row) for row in rows]
 
+    def list_bookmarked_albums(self) -> list[AlbumCardRecord]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT albums.*, artists.name AS artist_name
+                FROM albums
+                JOIN artists ON artists.id = albums.artist_id
+                WHERE albums.bookmarked_at IS NOT NULL AND albums.listened_at IS NULL
+                ORDER BY albums.bookmarked_at DESC, albums.id DESC
+                """
+            ).fetchall()
+        return [self._album_card_from_row(row) for row in rows]
+
     def get_album(self, album_id: int) -> AlbumDetailRecord:
         with self.connection() as connection:
             row = connection.execute(
@@ -526,6 +547,36 @@ class Database:
             )
         return self.get_album(album_id)
 
+    def set_album_bookmarked(self, album_id: int, bookmarked: bool) -> AlbumDetailRecord:
+        existing = self.get_album(album_id)
+        if bookmarked and existing.listened_at:
+            raise ValueError("Listened albums cannot be bookmarked. Mark it unlistened first.")
+        with self.connection() as connection:
+            connection.execute(
+                "UPDATE albums SET bookmarked_at = ?, updated_at = ? WHERE id = ?",
+                (utc_now_iso() if bookmarked else None, utc_now_iso(), album_id),
+            )
+        return self.get_album(album_id)
+
+    def mark_album_listened(self, album_id: int, listened: bool) -> AlbumDetailRecord:
+        self.get_album(album_id)
+        now = utc_now_iso()
+        with self.connection() as connection:
+            connection.execute(
+                "UPDATE albums SET listened_at = ?, updated_at = ? WHERE id = ?",
+                (now if listened else None, now, album_id),
+            )
+        return self.get_album(album_id)
+
+    def update_album_overview(self, album_id: int, overview: str | None) -> AlbumDetailRecord:
+        self.get_album(album_id)
+        with self.connection() as connection:
+            connection.execute(
+                "UPDATE albums SET overview = ?, updated_at = ? WHERE id = ?",
+                (overview, utc_now_iso(), album_id),
+            )
+        return self.get_album(album_id)
+
     def patch_album_cover(self, album_id: int, cover_image_path: str) -> AlbumDetailRecord:
         self.get_album(album_id)
         with self.connection() as connection:
@@ -549,7 +600,8 @@ class Database:
                 """
                 SELECT list_items.id, list_items.list_id, list_items.album_id, list_items.rank_position,
                        albums.artist_id, albums.title, albums.release_year, albums.genre, albums.rating, albums.duration_seconds,
-                       albums.cover_image_path, albums.cover_source_url, albums.notes, albums.created_at, albums.updated_at,
+                       albums.cover_image_path, albums.cover_source_url, albums.album_external_url, albums.album_stream_url,
+                       albums.album_type, albums.notes, albums.bookmarked_at, albums.listened_at, albums.created_at, albums.updated_at,
                        artists.name AS artist_name
                 FROM list_items
                 JOIN albums ON albums.id = list_items.album_id
@@ -571,7 +623,12 @@ class Database:
                     "duration_seconds": row["duration_seconds"],
                     "cover_image_path": row["cover_image_path"],
                     "cover_source_url": row["cover_source_url"],
+                    "album_external_url": row["album_external_url"],
+                    "album_stream_url": row["album_stream_url"],
+                    "album_type": row["album_type"],
                     "notes": row["notes"],
+                    "bookmarked_at": row["bookmarked_at"],
+                    "listened_at": row["listened_at"],
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                 }

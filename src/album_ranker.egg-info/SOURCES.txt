@@ -2,6 +2,7 @@ README.md
 pyproject.toml
 src/album_ranker/__init__.py
 src/album_ranker/app.py
+src/album_ranker/backup.py
 src/album_ranker/db.py
 src/album_ranker/importer.py
 src/album_ranker/main.py
@@ -16,5 +17,6 @@ src/album_ranker.egg-info/entry_points.txt
 src/album_ranker.egg-info/requires.txt
 src/album_ranker.egg-info/top_level.txt
 tests/test_api.py
+tests/test_backup.py
 tests/test_db.py
 tests/test_importer.py

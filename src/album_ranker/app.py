@@ -2,17 +2,29 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from album_ranker.db import Database
-from album_ranker.importer import CoverDownloader, MetadataImporter, draft_to_json, infer_cover_source_url_from_album_url
+from album_ranker.importer import (
+    CoverDownloader,
+    MetadataImporter,
+    draft_to_json,
+    infer_cover_source_url_from_album_url,
+    metal_archives_album_draft_from_url,
+    metal_archives_artist_url_from_album_url,
+)
 from album_ranker.openai_client import OpenAIClient
 from album_ranker.schemas import (
+    AlbumBookmarkPatch,
     AlbumDetailRecord,
+    AlbumListenedPatch,
     AlbumRatingPatch,
+    AlbumWithArtistConfirmRequest,
+    AlbumWithArtistImportResponse,
     AlbumListItemAddRequest,
     AlbumListRecord,
     AlbumListUpsert,
@@ -27,6 +39,9 @@ from album_ranker.schemas import (
     ImportConfirmResponse,
     ImportDraftResponse,
     ImportRequest,
+    OverviewDraftRequest,
+    OverviewDraftResponse,
+    OverviewSaveRequest,
     RefreshAlbumRequest,
     ReorderListItemsRequest,
     SettingsRecord,
@@ -39,7 +54,9 @@ from album_ranker.ui import (
     render_albums_page,
     render_artist_detail_page,
     render_artists_page,
+    render_bookmarks_page,
     render_genres_page,
+    render_imports_page,
     render_list_detail_page,
     render_lists_page,
     render_settings_page,
@@ -67,6 +84,17 @@ def _resolve_album_cover(
             if payload is not None:
                 payload["cover_image_path"] = local_path
     return album_upsert
+
+
+def _validate_album_source_url(source_url: str | None) -> None:
+    if not source_url:
+        return
+    parsed_source = urlparse(source_url)
+    if "metal-archives.com" in parsed_source.netloc.lower() and not parsed_source.path.startswith("/albums/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Paste a Metal Archives album URL from /albums/..., not an artist page URL.",
+        )
 
 
 def create_app(
@@ -126,6 +154,14 @@ def create_app(
     @app.get("/albums", response_class=HTMLResponse)
     async def albums_page() -> str:
         return render_albums_page(build_settings(), db.list_albums(), db.list_artists(), db.list_genres(), [])
+
+    @app.get("/imports", response_class=HTMLResponse)
+    async def imports_page() -> str:
+        return render_imports_page(build_settings())
+
+    @app.get("/bookmarks", response_class=HTMLResponse)
+    async def bookmarks_page() -> str:
+        return render_bookmarks_page(build_settings(), db.list_bookmarked_albums())
 
     @app.get("/genres", response_class=HTMLResponse)
     async def genres_page() -> str:
@@ -272,6 +308,22 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.patch("/api/albums/{album_id}/bookmark", response_model=AlbumDetailRecord)
+    async def patch_album_bookmark(album_id: int, payload: AlbumBookmarkPatch) -> AlbumDetailRecord:
+        try:
+            return db.set_album_bookmarked(album_id, payload.bookmarked)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.patch("/api/albums/{album_id}/listened", response_model=AlbumDetailRecord)
+    async def patch_album_listened(album_id: int, payload: AlbumListenedPatch) -> AlbumDetailRecord:
+        try:
+            return db.mark_album_listened(album_id, payload.listened)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.post("/api/albums/{album_id}/cover", response_model=AlbumDetailRecord)
     async def upload_album_cover(album_id: int, file: UploadFile) -> AlbumDetailRecord:
         try:
@@ -298,6 +350,7 @@ def create_app(
                 status_code=400,
                 detail="No source URL available. Add an external URL to the album first.",
             )
+        _validate_album_source_url(source_url)
         request = ImportRequest(
             artist_name=existing.artist_name,
             album_title=existing.title,
@@ -340,6 +393,35 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"ok": True}
+
+    @app.post("/api/albums/{album_id}/overview/draft", response_model=OverviewDraftResponse)
+    async def generate_album_overview(album_id: int, payload: OverviewDraftRequest) -> OverviewDraftResponse:
+        try:
+            album = db.get_album(album_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            overview = importer.generate_album_overview(
+                album,
+                language=payload.language,
+                model=db.get_active_model(settings.model),
+            )
+        except Exception as exc:
+            if settings.openai_api_key:
+                ai_state["status"] = "last_request_failed"
+                ai_state["detail"] = str(exc)
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if settings.openai_api_key:
+            ai_state["status"] = "ready"
+            ai_state["detail"] = None
+        return OverviewDraftResponse(overview=overview)
+
+    @app.patch("/api/albums/{album_id}/overview", response_model=AlbumDetailRecord)
+    async def save_album_overview(album_id: int, payload: OverviewSaveRequest) -> AlbumDetailRecord:
+        try:
+            return db.update_album_overview(album_id, payload.overview)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/lists", response_model=list[AlbumListRecord])
     async def list_lists() -> list[AlbumListRecord]:
@@ -411,6 +493,7 @@ def create_app(
 
     @app.post("/api/import/album", response_model=ImportDraftResponse)
     async def import_album(payload: ImportRequest) -> ImportDraftResponse:
+        _validate_album_source_url(payload.source_url)
         draft_data = importer.create_album_draft(payload, model=db.get_active_model(settings.model))
         if settings.openai_api_key:
             if importer.last_request_failed:
@@ -421,6 +504,121 @@ def create_app(
                 ai_state["detail"] = None
         draft = db.create_import_job("album", payload, draft_to_json(draft_data))
         return ImportDraftResponse(draft=draft)
+
+    @app.post("/api/import/album-with-artist", response_model=AlbumWithArtistImportResponse)
+    async def import_album_with_artist(payload: ImportRequest) -> AlbumWithArtistImportResponse:
+        if not payload.source_url:
+            raise HTTPException(status_code=400, detail="Source URL is required")
+        _validate_album_source_url(payload.source_url)
+        album_data = importer.create_album_draft(payload, model=db.get_active_model(settings.model))
+        deterministic_album_data = metal_archives_album_draft_from_url(
+            ImportRequest(
+                artist_name=album_data.artist_name or payload.artist_name,
+                album_title=album_data.album_title or payload.album_title,
+                source_url=payload.source_url,
+            )
+        )
+        if deterministic_album_data is not None:
+            album_data = album_data.model_copy(
+                update={
+                    "artist_name": deterministic_album_data.artist_name or album_data.artist_name,
+                    "album_title": deterministic_album_data.album_title or album_data.album_title,
+                    "album_external_url": deterministic_album_data.album_external_url or album_data.album_external_url,
+                    "album_type": deterministic_album_data.album_type or album_data.album_type,
+                    "release_year": deterministic_album_data.release_year or album_data.release_year,
+                    "duration_seconds": deterministic_album_data.duration_seconds or album_data.duration_seconds,
+                    "cover_source_url": deterministic_album_data.cover_source_url or album_data.cover_source_url,
+                    "notes": deterministic_album_data.notes or album_data.notes,
+                    "tracks": deterministic_album_data.tracks or album_data.tracks,
+                }
+            )
+        if album_data.notes and "Encyclopaedia Metallum" in album_data.notes:
+            album_data = album_data.model_copy(update={"notes": None})
+        album_request = ImportRequest(
+            artist_name=album_data.artist_name or payload.artist_name,
+            album_title=album_data.album_title or payload.album_title,
+            source_url=payload.source_url,
+        )
+        album_draft = db.create_import_job("album", album_request, draft_to_json(album_data))
+        artist_source_url = metal_archives_artist_url_from_album_url(payload.source_url)
+        artist_exists = bool(album_data.artist_name and db.get_artist_by_name(album_data.artist_name))
+        artist_draft = None
+        if not artist_exists and artist_source_url:
+            artist_request = ImportRequest(artist_name=album_data.artist_name, source_url=artist_source_url)
+            artist_data = importer.create_artist_draft(artist_request, model=db.get_active_model(settings.model))
+            artist_payload = draft_to_json(artist_data)
+            if artist_data.genre and not album_data.genre:
+                album_data = album_data.model_copy(update={"genre": artist_data.genre})
+                album_draft = db.update_import_job(
+                    album_draft.id,
+                    payload=draft_to_json(album_data),
+                    chosen_source_url=album_draft.chosen_source_url,
+                    status=album_draft.status,
+                )
+            artist_draft = db.create_import_job("artist", artist_request, artist_payload)
+        if settings.openai_api_key:
+            if importer.last_request_failed:
+                ai_state["status"] = "last_request_failed"
+                ai_state["detail"] = importer.last_error
+            else:
+                ai_state["status"] = "ready"
+                ai_state["detail"] = None
+        return AlbumWithArtistImportResponse(
+            album_draft=album_draft,
+            artist_draft=artist_draft,
+            artist_exists=artist_exists,
+            artist_source_url=artist_source_url,
+        )
+
+    @app.post("/api/import/album-with-artist/confirm", response_model=ImportConfirmResponse)
+    async def confirm_album_with_artist(payload: AlbumWithArtistConfirmRequest) -> ImportConfirmResponse:
+        try:
+            album_draft = db.get_import_job(payload.album_draft_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if album_draft.target_type != "album":
+            raise HTTPException(status_code=400, detail="Album draft target type does not match")
+        artist_draft = None
+        if payload.artist_draft_id is not None:
+            try:
+                artist_draft = db.get_import_job(payload.artist_draft_id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            if artist_draft.target_type != "artist":
+                raise HTTPException(status_code=400, detail="Artist draft target type does not match")
+        artist: ArtistRecord | None = None
+        if payload.artist_draft_id is not None:
+            if payload.artist_payload is None:
+                raise HTTPException(status_code=400, detail="Artist payload is required when artist_draft_id is set")
+            artist_payload = dict(payload.artist_payload)
+            if "name" not in artist_payload and "artist_name" in artist_payload:
+                artist_payload["name"] = artist_payload.pop("artist_name")
+            artist = db.create_artist(ArtistUpsert.model_validate(artist_payload))
+            db.update_import_job(
+                payload.artist_draft_id,
+                payload=payload.artist_payload,
+                chosen_source_url=payload.artist_chosen_source_url,
+                status="confirmed",
+            )
+        album_payload = dict(payload.album_payload)
+        album_upsert = AlbumUpsert.model_validate(album_payload)
+        album_upsert = _resolve_album_cover(album_upsert, album_payload, cover_downloader)
+        existing: AlbumDetailRecord | None = None
+        if album_upsert.album_external_url:
+            existing = db.get_album_by_external_url(album_upsert.album_external_url)
+        if existing is not None:
+            album = db.update_album(existing.id, album_upsert)
+        else:
+            album = db.create_album(album_upsert)
+        updated = db.update_import_job(
+            payload.album_draft_id,
+            payload=album_payload,
+            chosen_source_url=payload.album_chosen_source_url,
+            status="confirmed",
+        )
+        if artist is None:
+            artist = db.get_artist_by_name(album.artist_name)
+        return ImportConfirmResponse(draft=updated, artist=artist, album=album)
 
     @app.post("/api/import/{draft_id}/confirm", response_model=ImportConfirmResponse)
     async def confirm_import(draft_id: int, payload: ImportConfirmRequest) -> ImportConfirmResponse:

@@ -1,2 +1,3 @@
 [console_scripts]
 album-ranker = album_ranker.main:main
+album-ranker-backup = album_ranker.backup:main

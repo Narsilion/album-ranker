@@ -59,6 +59,14 @@ class AlbumRatingPatch(BaseModel):
     rating: int | None = Field(default=None, ge=1, le=10)
 
 
+class AlbumBookmarkPatch(BaseModel):
+    bookmarked: bool
+
+
+class AlbumListenedPatch(BaseModel):
+    listened: bool
+
+
 class AlbumCardRecord(BaseModel):
     id: int
     artist_id: int
@@ -74,6 +82,8 @@ class AlbumCardRecord(BaseModel):
     album_stream_url: str | None = None
     album_type: str | None = None
     notes: str | None = None
+    bookmarked_at: str | None = None
+    listened_at: str | None = None
     created_at: str
     updated_at: str
     model_config = ConfigDict(from_attributes=True)
@@ -84,6 +94,7 @@ class AlbumDetailRecord(AlbumCardRecord):
     artist_description_source_url: str | None = None
     artist_description_source_label: str | None = None
     artist_origin: str | None = None
+    overview: str | None = None
     tracks: list[TrackRecord] = Field(default_factory=list)
 
 
@@ -166,6 +177,10 @@ class ImportRequest(BaseModel):
     source_url: str | None = None
 
 
+class RefreshAlbumRequest(BaseModel):
+    source_url: str | None = None
+
+
 class ImportTrackDraft(BaseModel):
     track_number: int = Field(ge=1)
     title: str
@@ -179,6 +194,7 @@ class ArtistDraftData(BaseModel):
     description_source_label: str | None = None
     external_url: str | None = None
     origin: str | None = None
+    genre: str | None = None
 
 
 class AlbumDraftData(BaseModel):
@@ -217,10 +233,26 @@ class ImportDraftResponse(BaseModel):
     draft: ImportDraftRecord
 
 
+class AlbumWithArtistImportResponse(BaseModel):
+    album_draft: ImportDraftRecord
+    artist_draft: ImportDraftRecord | None = None
+    artist_exists: bool = False
+    artist_source_url: str | None = None
+
+
 class ImportConfirmRequest(BaseModel):
     target_type: Literal["artist", "album"]
     payload: dict[str, Any]
     chosen_source_url: str | None = None
+
+
+class AlbumWithArtistConfirmRequest(BaseModel):
+    album_draft_id: int
+    album_payload: dict[str, Any]
+    album_chosen_source_url: str | None = None
+    artist_draft_id: int | None = None
+    artist_payload: dict[str, Any] | None = None
+    artist_chosen_source_url: str | None = None
 
 
 class ImportConfirmResponse(BaseModel):
@@ -232,6 +264,18 @@ class ImportConfirmResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     now: datetime
+
+
+class OverviewDraftRequest(BaseModel):
+    language: Literal["en", "ru"]
+
+
+class OverviewDraftResponse(BaseModel):
+    overview: str
+
+
+class OverviewSaveRequest(BaseModel):
+    overview: str | None = None
 
 
 class RunStatusResponse(BaseModel):

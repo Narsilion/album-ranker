@@ -7,27 +7,77 @@ Description-Content-Type: text/markdown
 Requires-Dist: fastapi>=0.115.0
 Requires-Dist: uvicorn>=0.30.0
 Requires-Dist: pydantic>=2.8.0
+Requires-Dist: python-multipart>=0.0.9
 Provides-Extra: dev
 Requires-Dist: pytest>=8.3.0; extra == "dev"
 Requires-Dist: httpx>=0.28.0; extra == "dev"
 
 # Album Ranker
 
-Local-first web application for collecting albums, viewing artist and album details, and building ranked lists.
+Local-first FastAPI + SQLite web app for collecting albums, browsing artists, opening album detail pages, and building ranked album lists.
 
-## Features
+## What It Does
 
-- dark-theme media-library UI
-- artists, albums, album details, lists, and settings pages
-- SQLite persistence
-- manual CRUD for artists, albums, tracks, and ranking lists
-- optional AI-assisted metadata import with review-before-save
-- local cover image downloads for confirmed imports
+- stores artists, albums, tracks, ranking lists, and manually managed genres in SQLite
+- renders a dark-theme web UI from server-side HTML
+- supports manual create/edit/delete flows
+- supports optional AI-assisted import with review before save
+- downloads cover images into local app storage
+- runs fully on the local machine
 
-## Requirements
+## Main Pages
+
+- `/albums`
+  visual album grid with manual genre/year/artist filtering
+- `/artists`
+  artist index only
+- `/artists/{id}`
+  dedicated artist page with album grid and artist-scoped album import
+- `/albums/{id}`
+  album details, tracklist, metadata editing
+- `/lists`
+  list index and list creation
+- `/lists/{id}`
+  dedicated ranking page with add/remove/reorder actions
+- `/genres`
+  manually curated genre filter list
+- `/settings`
+  model selection and runtime info
+
+## Tech Stack
 
 - Python 3.11+
-- `OPENAI_API_KEY` only if you want real AI-assisted metadata drafting
+- FastAPI
+- SQLite
+- Pydantic v2
+- Uvicorn
+- plain HTML/CSS/JavaScript rendered from `src/album_ranker/ui.py`
+
+## Project Layout
+
+```text
+src/album_ranker/
+  app.py          FastAPI routes and app wiring
+  db.py           SQLite schema and persistence layer
+  importer.py     AI import flow, metadata extraction, cover inference
+  openai_client.py
+  schemas.py      Pydantic models
+  settings.py     env/config loading
+  ui.py           all page rendering and client-side JS
+  main.py         CLI entrypoint
+
+tests/
+  test_api.py
+  test_db.py
+  test_importer.py
+  conftest.py
+```
+
+Important:
+
+- edit files under `src/album_ranker/`
+- ignore `build/lib/album_ranker/`; it is generated output
+- app data lives under `.data/` by default
 
 ## Setup
 
@@ -41,21 +91,146 @@ python -m pip install -e '.[dev]'
 ## Run
 
 ```bash
+cd /Users/darkcreation/Documents/git_repos/album-ranker
+source .venv/bin/activate
 album-ranker
 ```
 
-Default URL: `http://127.0.0.1:8780`
+Default URL:
 
-## Environment
+```text
+http://127.0.0.1:8780
+```
 
-- `OPENAI_API_KEY` optional for AI-assisted import
-- `ALBUM_RANKER_MODEL` default `gpt-5`
-- `ALBUM_RANKER_HOST` default `127.0.0.1`
-- `ALBUM_RANKER_PORT` default `8780`
-- `ALBUM_RANKER_DB_PATH` default `./.data/album-ranker.db`
+## Reinstall After Code Changes
+
+This repo is often run from a non-editable install in the local `.venv`. If a UI or backend change does not appear in the running app, reinstall the package:
+
+```bash
+cd /Users/darkcreation/Documents/git_repos/album-ranker
+source .venv/bin/activate
+python -m pip install .
+album-ranker
+```
+
+## Configuration
+
+Environment variables:
+
+- `OPENAI_API_KEY`
+  optional, only needed for real AI-assisted import
+- `ALBUM_RANKER_MODEL`
+  default: `gpt-5`
+- `ALBUM_RANKER_HOST`
+  default: `127.0.0.1`
+- `ALBUM_RANKER_PORT`
+  default: `8780`
+- `ALBUM_RANKER_DB_PATH`
+  default: `./.data/album-ranker.db`
 
 ## Tests
 
 ```bash
+cd /Users/darkcreation/Documents/git_repos/album-ranker
+source .venv/bin/activate
 pytest
 ```
+
+## Daily Backup
+
+The repo includes a backup command and a macOS `launchd` job definition.
+
+### Manual backup
+
+```bash
+cd /Users/darkcreation/Documents/git_repos/album-ranker
+source .venv/bin/activate
+album-ranker-backup
+```
+
+By default this writes to `.data/backups/` inside the project.
+
+### Backup to iCloud Drive
+
+Pass `--backup-dir` to write directly into iCloud:
+
+```bash
+album-ranker-backup \
+  --backup-dir "$HOME/Library/Mobile Documents/com~apple~CloudDocs/album-ranker-backups" \
+  --retention-days 30
+```
+
+Backups are dated SQLite files, e.g. `album-ranker-2026-04-13.db`.  
+iCloud syncs them automatically — open them in any SQLite viewer on any signed-in device.
+
+### Scheduled backup (launchd)
+
+The included plist runs daily at 03:00 and writes to iCloud:
+
+```text
+launchd/com.darkcreation.album-ranker-backup.plist
+```
+
+**Load the job** (run once after cloning or after editing the plist):
+
+```bash
+# Create the iCloud backup folder first (launchd won't create it)
+mkdir -p ~/Library/Mobile\ Documents/com~apple~CloudDocs/album-ranker-backups
+
+# Copy the plist to the standard LaunchAgents location
+cp ~/Documents/git_repos/album-ranker/launchd/com.darkcreation.album-ranker-backup.plist \
+   ~/Library/LaunchAgents/
+
+# Register with launchd (modern macOS syntax)
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.darkcreation.album-ranker-backup.plist
+```
+
+**Check status:**
+
+```bash
+launchctl print gui/$(id -u)/com.darkcreation.album-ranker-backup
+```
+
+**View the log** (stdout + stderr go to the same file):
+
+```bash
+tail -50 /Users/darkcreation/Documents/git_repos/album-ranker/.data/backup.log
+```
+
+**Run the job immediately** (without waiting for 03:00):
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.darkcreation.album-ranker-backup
+```
+
+**Unload the job** (stops scheduling):
+
+```bash
+launchctl bootout gui/$(id -u)/com.darkcreation.album-ranker-backup
+```
+
+**Change the backup directory or retention** — edit the plist `ProgramArguments`, then reload:
+
+```bash
+launchctl bootout gui/$(id -u)/com.darkcreation.album-ranker-backup
+# edit ~/Library/LaunchAgents/com.darkcreation.album-ranker-backup.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.darkcreation.album-ranker-backup.plist
+```
+
+### Backup files location
+
+| Location | Path |
+|---|---|
+| Default local | `.data/backups/album-ranker-YYYY-MM-DD.db` |
+| iCloud (plist default) | `~/Library/Mobile Documents/com~apple~CloudDocs/album-ranker-backups/` |
+| Log | `.data/backup.log` |
+
+Each backup is a complete, standalone SQLite file — open it directly with any SQLite browser to inspect or restore data.
+
+## Current Implementation Notes
+
+- album import is scoped to the dedicated artist page, not the shared artists index
+- genres shown in the album filter are managed only from `/genres`
+- genre filtering is substring-based, not exact-match
+- album descriptions on the details page prefer album notes and render imported metadata on separate lines
+- ranking lists have dedicated detail pages; add/remove/reorder actions happen there
