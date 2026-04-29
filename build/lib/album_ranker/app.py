@@ -4,9 +4,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from album_ranker.db import Database
 from album_ranker.importer import (
@@ -97,6 +100,84 @@ def _validate_album_source_url(source_url: str | None) -> None:
         )
 
 
+def _validation_message(field: str, message: str) -> str:
+    normalized = message.replace("Value error, ", "")
+    field_labels = {
+        "active_model": "Model",
+        "artist_name": "Artist name",
+        "album_title": "Album title",
+        "title": "Album title",
+        "name": "Name",
+        "release_year": "Release year",
+        "year": "Year",
+        "rating": "Rating",
+        "duration_seconds": "Duration",
+        "duration": "Duration",
+        "track_number": "Track number",
+        "language": "Overview language",
+        "limit": "List size",
+    }
+    label = field_labels.get(field, field.replace("_", " ").title())
+    if normalized == "Field required":
+        return f"{label} is required."
+    if "greater than or equal to 1000" in normalized or "less than or equal to 9999" in normalized:
+        return f"{label} must be a four-digit year."
+    if "greater than or equal to 1" in normalized and ("rating" in field or "limit" in field):
+        return f"{label} must be at least 1."
+    if "less than or equal to 10" in normalized and "rating" in field:
+        return "Rating must be between 1 and 10."
+    if "less than or equal to 500" in normalized and "limit" in field:
+        return "List size must be between 1 and 500."
+    if "Input should be 'en' or 'ru'" in normalized:
+        return "Overview language must be English or Russian."
+    return f"{label}: {normalized}"
+
+
+def _validation_detail(errors: list[dict[str, object]]) -> str:
+    messages = []
+    for error in errors:
+        loc = [str(part) for part in error.get("loc", []) if part not in ("body", "query", "path")]
+        field = loc[-1] if loc else "value"
+        messages.append(_validation_message(field, str(error.get("msg", "Invalid value"))))
+    return " ".join(dict.fromkeys(messages)) or "Check the highlighted fields and try again."
+
+
+def _friendly_ai_error(exc: Exception, *, action: str) -> str:
+    detail = str(exc)
+    if "OPENAI_API_KEY is not configured" in detail:
+        return "AI is not configured. Add OPENAI_API_KEY and restart the app."
+    if "Unexpected OpenAI response shape" in detail or "not a JSON object" in detail:
+        return f"AI returned {action} in an unexpected format. Try regenerating."
+    if "OpenAI request failed" in detail:
+        return "AI request failed. Check your connection, API key, or model setting, then try again."
+    return detail or f"{action.capitalize()} failed. Try again."
+
+
+def _error_page(title: str, message: str, back_href: str = "/albums", back_label: str = "Back To Albums") -> str:
+    return f"""<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{title} | Album Ranker</title>
+    <style>
+      body {{ margin:0; min-height:100vh; display:grid; place-items:center; background:#101114; color:#f2f0ea; font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+      main {{ width:min(560px, calc(100vw - 32px)); }}
+      h1 {{ margin:0 0 10px; font-size:32px; }}
+      p {{ color:#b8b2a8; line-height:1.5; }}
+      a {{ display:inline-flex; margin-top:14px; padding:11px 16px; border-radius:999px; background:#f0b35a; color:#15100a; text-decoration:none; font-weight:700; }}
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>{title}</h1>
+      <p>{message}</p>
+      <a href="{back_href}">{back_label}</a>
+    </main>
+  </body>
+</html>"""
+
+
 def create_app(
     settings: Settings,
     *,
@@ -120,6 +201,26 @@ def create_app(
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.cover_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/library-data", StaticFiles(directory=settings.data_dir), name="library-data")
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": _validation_detail(exc.errors())})
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+        if not request.url.path.startswith("/api/") and exc.status_code == 404:
+            noun = "Page"
+            if request.url.path.startswith("/albums/"):
+                noun = "Album"
+            elif request.url.path.startswith("/artists/"):
+                noun = "Artist"
+            elif request.url.path.startswith("/lists/"):
+                noun = "List"
+            return HTMLResponse(
+                _error_page(f"{noun} Not Found", f"{noun} was not found. It may have been deleted."),
+                status_code=404,
+            )
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
     def build_settings() -> SettingsRecord:
         return db.build_settings_record(
@@ -185,7 +286,7 @@ def create_app(
             record = db.get_list(list_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return render_list_detail_page(build_settings(), record, db.list_albums())
+        return render_list_detail_page(build_settings(), record, db.list_albums(), db.list_genres())
 
     @app.get("/settings", response_class=HTMLResponse)
     async def settings_page() -> str:
@@ -201,7 +302,12 @@ def create_app(
 
     @app.put("/api/settings", response_model=SettingsRecord)
     async def update_settings(payload: SettingsUpdateRequest) -> SettingsRecord:
-        db.update_settings(payload)
+        if payload.active_model not in available_models:
+            raise HTTPException(status_code=400, detail="That model is not in the available model list. Pick one from the menu.")
+        try:
+            db.update_settings(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return build_settings()
 
     @app.get("/api/artists", response_model=list[ArtistRecord | dict])
@@ -268,7 +374,14 @@ def create_app(
             artist_name=existing.name,
             source_url=source_url,
         )
-        draft_data = importer.create_artist_draft(request, model=db.get_active_model(settings.model))
+        try:
+            draft_data = importer.create_artist_draft(request, model=db.get_active_model(settings.model))
+        except Exception as exc:
+            detail = _friendly_ai_error(exc, action="metadata")
+            if settings.openai_api_key:
+                ai_state["status"] = "last_request_failed"
+                ai_state["detail"] = detail
+            raise HTTPException(status_code=502, detail=detail) from exc
         upsert = ArtistUpsert(
             name=draft_data.artist_name or existing.name,
             description=draft_data.description or existing.description,
@@ -332,10 +445,13 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         suffix = Path(file.filename or "").suffix.lower() or ".jpg"
         if suffix not in (".jpg", ".jpeg", ".png", ".webp"):
-            raise HTTPException(status_code=400, detail="Unsupported image type")
+            raise HTTPException(status_code=400, detail="Cover upload failed. Use JPG, PNG, or WebP.")
         settings.cover_dir.mkdir(parents=True, exist_ok=True)
         target = settings.cover_dir / f"album-{album_id}-cover{suffix}"
-        target.write_bytes(await file.read())
+        try:
+            target.write_bytes(await file.read())
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail="The selected file could not be saved. Check that the data directory is writable.") from exc
         return db.patch_album_cover(album_id, str(target))
 
     @app.post("/api/albums/{album_id}/refresh", response_model=AlbumDetailRecord)
@@ -356,7 +472,14 @@ def create_app(
             album_title=existing.title,
             source_url=source_url,
         )
-        draft_data = importer.create_album_draft(request, model=db.get_active_model(settings.model))
+        try:
+            draft_data = importer.create_album_draft(request, model=db.get_active_model(settings.model))
+        except Exception as exc:
+            detail = _friendly_ai_error(exc, action="metadata")
+            if settings.openai_api_key:
+                ai_state["status"] = "last_request_failed"
+                ai_state["detail"] = detail
+            raise HTTPException(status_code=502, detail=detail) from exc
         tracks = [
             TrackUpsert(track_number=t.track_number, title=t.title, duration_seconds=t.duration_seconds)
             for t in draft_data.tracks
@@ -407,10 +530,11 @@ def create_app(
                 model=db.get_active_model(settings.model),
             )
         except Exception as exc:
+            detail = _friendly_ai_error(exc, action="overview")
             if settings.openai_api_key:
                 ai_state["status"] = "last_request_failed"
-                ai_state["detail"] = str(exc)
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+                ai_state["detail"] = detail
+            raise HTTPException(status_code=502, detail=detail) from exc
         if settings.openai_api_key:
             ai_state["status"] = "ready"
             ai_state["detail"] = None
@@ -480,11 +604,18 @@ def create_app(
 
     @app.post("/api/import/artist", response_model=ImportDraftResponse)
     async def import_artist(payload: ImportRequest) -> ImportDraftResponse:
-        draft_data = importer.create_artist_draft(payload, model=db.get_active_model(settings.model))
+        try:
+            draft_data = importer.create_artist_draft(payload, model=db.get_active_model(settings.model))
+        except Exception as exc:
+            detail = _friendly_ai_error(exc, action="metadata")
+            if settings.openai_api_key:
+                ai_state["status"] = "last_request_failed"
+                ai_state["detail"] = detail
+            raise HTTPException(status_code=502, detail=detail) from exc
         if settings.openai_api_key:
             if importer.last_request_failed:
                 ai_state["status"] = "last_request_failed"
-                ai_state["detail"] = importer.last_error
+                ai_state["detail"] = _friendly_ai_error(Exception(importer.last_error or ""), action="metadata")
             else:
                 ai_state["status"] = "ready"
                 ai_state["detail"] = None
@@ -494,11 +625,18 @@ def create_app(
     @app.post("/api/import/album", response_model=ImportDraftResponse)
     async def import_album(payload: ImportRequest) -> ImportDraftResponse:
         _validate_album_source_url(payload.source_url)
-        draft_data = importer.create_album_draft(payload, model=db.get_active_model(settings.model))
+        try:
+            draft_data = importer.create_album_draft(payload, model=db.get_active_model(settings.model))
+        except Exception as exc:
+            detail = _friendly_ai_error(exc, action="metadata")
+            if settings.openai_api_key:
+                ai_state["status"] = "last_request_failed"
+                ai_state["detail"] = detail
+            raise HTTPException(status_code=502, detail=detail) from exc
         if settings.openai_api_key:
             if importer.last_request_failed:
                 ai_state["status"] = "last_request_failed"
-                ai_state["detail"] = importer.last_error
+                ai_state["detail"] = _friendly_ai_error(Exception(importer.last_error or ""), action="metadata")
             else:
                 ai_state["status"] = "ready"
                 ai_state["detail"] = None
@@ -510,7 +648,14 @@ def create_app(
         if not payload.source_url:
             raise HTTPException(status_code=400, detail="Source URL is required")
         _validate_album_source_url(payload.source_url)
-        album_data = importer.create_album_draft(payload, model=db.get_active_model(settings.model))
+        try:
+            album_data = importer.create_album_draft(payload, model=db.get_active_model(settings.model))
+        except Exception as exc:
+            detail = _friendly_ai_error(exc, action="metadata")
+            if settings.openai_api_key:
+                ai_state["status"] = "last_request_failed"
+                ai_state["detail"] = detail
+            raise HTTPException(status_code=502, detail=detail) from exc
         deterministic_album_data = metal_archives_album_draft_from_url(
             ImportRequest(
                 artist_name=album_data.artist_name or payload.artist_name,
@@ -545,7 +690,14 @@ def create_app(
         artist_draft = None
         if not artist_exists and artist_source_url:
             artist_request = ImportRequest(artist_name=album_data.artist_name, source_url=artist_source_url)
-            artist_data = importer.create_artist_draft(artist_request, model=db.get_active_model(settings.model))
+            try:
+                artist_data = importer.create_artist_draft(artist_request, model=db.get_active_model(settings.model))
+            except Exception as exc:
+                detail = _friendly_ai_error(exc, action="metadata")
+                if settings.openai_api_key:
+                    ai_state["status"] = "last_request_failed"
+                    ai_state["detail"] = detail
+                raise HTTPException(status_code=502, detail=detail) from exc
             artist_payload = draft_to_json(artist_data)
             if artist_data.genre and not album_data.genre:
                 album_data = album_data.model_copy(update={"genre": artist_data.genre})
@@ -559,7 +711,7 @@ def create_app(
         if settings.openai_api_key:
             if importer.last_request_failed:
                 ai_state["status"] = "last_request_failed"
-                ai_state["detail"] = importer.last_error
+                ai_state["detail"] = _friendly_ai_error(Exception(importer.last_error or ""), action="metadata")
             else:
                 ai_state["status"] = "ready"
                 ai_state["detail"] = None
@@ -593,7 +745,10 @@ def create_app(
             artist_payload = dict(payload.artist_payload)
             if "name" not in artist_payload and "artist_name" in artist_payload:
                 artist_payload["name"] = artist_payload.pop("artist_name")
-            artist = db.create_artist(ArtistUpsert.model_validate(artist_payload))
+            try:
+                artist = db.create_artist(ArtistUpsert.model_validate(artist_payload))
+            except ValidationError as exc:
+                raise HTTPException(status_code=422, detail=_validation_detail(exc.errors())) from exc
             db.update_import_job(
                 payload.artist_draft_id,
                 payload=payload.artist_payload,
@@ -601,7 +756,10 @@ def create_app(
                 status="confirmed",
             )
         album_payload = dict(payload.album_payload)
-        album_upsert = AlbumUpsert.model_validate(album_payload)
+        try:
+            album_upsert = AlbumUpsert.model_validate(album_payload)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=_validation_detail(exc.errors())) from exc
         album_upsert = _resolve_album_cover(album_upsert, album_payload, cover_downloader)
         existing: AlbumDetailRecord | None = None
         if album_upsert.album_external_url:
@@ -634,7 +792,10 @@ def create_app(
             artist_payload = dict(payload.payload)
             if "name" not in artist_payload and "artist_name" in artist_payload:
                 artist_payload["name"] = artist_payload.pop("artist_name")
-            artist = db.create_artist(ArtistUpsert.model_validate(artist_payload))
+            try:
+                artist = db.create_artist(ArtistUpsert.model_validate(artist_payload))
+            except ValidationError as exc:
+                raise HTTPException(status_code=422, detail=_validation_detail(exc.errors())) from exc
             updated = db.update_import_job(
                 draft_id,
                 payload=payload.payload,
@@ -642,7 +803,10 @@ def create_app(
                 status="confirmed",
             )
             return ImportConfirmResponse(draft=updated, artist=artist)
-        album_upsert = AlbumUpsert.model_validate(payload.payload)
+        try:
+            album_upsert = AlbumUpsert.model_validate(payload.payload)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=_validation_detail(exc.errors())) from exc
         album_upsert = _resolve_album_cover(album_upsert, payload.payload, cover_downloader)
         existing: AlbumDetailRecord | None = None
         if album_upsert.album_external_url:

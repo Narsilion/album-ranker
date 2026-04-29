@@ -3,7 +3,42 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+import json
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+def _strip_text(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
+def _parse_genres_raw(value: Any) -> list[str]:
+    """Parse a genres value that may be a JSON array string, plain string, list, or None."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, list):
+                return [str(v).strip() for v in parsed if str(v).strip()]
+        except (json.JSONDecodeError, ValueError):
+            pass
+        return [stripped]
+    return []
+
+
+def _require_text(value: str, field_name: str) -> str:
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError(f"{field_name} is required")
+    return stripped
 
 
 class TrackUpsert(BaseModel):
@@ -11,6 +46,11 @@ class TrackUpsert(BaseModel):
     title: str
     duration_seconds: int | None = Field(default=None, ge=0)
     position: int = Field(default=0, ge=0)
+
+    @field_validator("title")
+    @classmethod
+    def title_required(cls, value: str) -> str:
+        return _require_text(value, "Track title")
 
 
 class TrackRecord(TrackUpsert):
@@ -26,6 +66,23 @@ class ArtistUpsert(BaseModel):
     description_source_label: str | None = None
     external_url: str | None = None
     origin: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def name_required(cls, value: str) -> str:
+        return _require_text(value, "Artist name")
+
+    @field_validator(
+        "description",
+        "description_source_url",
+        "description_source_label",
+        "external_url",
+        "origin",
+        mode="before",
+    )
+    @classmethod
+    def strip_optional_text(cls, value: Any) -> Any:
+        return _strip_text(value)
 
 
 class ArtistRecord(ArtistUpsert):
@@ -53,6 +110,33 @@ class AlbumUpsert(BaseModel):
     cover_source_url: str | None = None
     notes: str | None = None
     tracks: list[TrackUpsert] = Field(default_factory=list)
+
+    @field_validator("artist_name")
+    @classmethod
+    def artist_name_required(cls, value: str) -> str:
+        return _require_text(value, "Artist name")
+
+    @field_validator("title")
+    @classmethod
+    def title_required(cls, value: str) -> str:
+        return _require_text(value, "Album title")
+
+    @field_validator(
+        "artist_description",
+        "artist_description_source_url",
+        "artist_description_source_label",
+        "album_external_url",
+        "album_stream_url",
+        "album_type",
+        "genre",
+        "cover_image_path",
+        "cover_source_url",
+        "notes",
+        mode="before",
+    )
+    @classmethod
+    def strip_optional_text(cls, value: Any) -> Any:
+        return _strip_text(value)
 
 
 class AlbumRatingPatch(BaseModel):
@@ -106,9 +190,27 @@ class AlbumListUpsert(BaseModel):
     name: str
     description: str | None = None
     year: int | None = Field(default=None, ge=1000, le=9999)
-    genre_filter_hint: str | None = None
+    genres: list[str] = Field(default_factory=list)
     is_auto: bool = False
     auto_limit: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def compat_genre_filter_hint(cls, data: Any) -> Any:
+        """Accept legacy genre_filter_hint from old DB rows or API clients."""
+        if isinstance(data, dict) and "genre_filter_hint" in data and "genres" not in data:
+            data = {**data, "genres": _parse_genres_raw(data["genre_filter_hint"])}
+        return data
+
+    @field_validator("name")
+    @classmethod
+    def name_required(cls, value: str) -> str:
+        return _require_text(value, "List name")
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def strip_optional_text(cls, value: Any) -> Any:
+        return _strip_text(value)
 
 
 class AlbumListRecord(AlbumListUpsert):
@@ -140,12 +242,26 @@ class AutoListBestRatedRequest(BaseModel):
     name: str
     limit: int = Field(default=10, ge=1, le=500)
     year: int | None = Field(default=None, ge=1000, le=9999)
-    genre: str | None = None
+    genres: list[str] = Field(default_factory=list)
     update_existing: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def compat_genre(cls, data: Any) -> Any:
+        """Accept legacy single genre field."""
+        if isinstance(data, dict) and "genre" in data and "genres" not in data:
+            raw = data["genre"]
+            data = {**data, "genres": _parse_genres_raw(raw)}
+        return data
 
 
 class GenreUpsert(BaseModel):
     name: str
+
+    @field_validator("name")
+    @classmethod
+    def name_required(cls, value: str) -> str:
+        return _require_text(value, "Genre name")
 
 
 class GenreRecord(GenreUpsert):
@@ -165,10 +281,12 @@ class SettingsRecord(BaseModel):
     last_import_diagnostics: dict[str, Any] | None = None
     host: str
     port: int
+    theme: str = "dark"
 
 
 class SettingsUpdateRequest(BaseModel):
     active_model: str
+    theme: str = "dark"
 
 
 class ImportRequest(BaseModel):

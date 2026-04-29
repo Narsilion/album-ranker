@@ -34,6 +34,22 @@ def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _parse_genres_db(value: str | None) -> list[str]:
+    """Parse the genre_filter_hint DB column value into a list of genres."""
+    if not value:
+        return []
+    stripped = value.strip()
+    if not stripped:
+        return []
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, list):
+            return [str(v).strip() for v in parsed if str(v).strip()]
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return [stripped]
+
+
 def slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug or "artist"
@@ -216,10 +232,17 @@ class Database:
             last_import_diagnostics=last_import_diagnostics,
             host=host,
             port=port,
+            theme=self.get_app_setting("theme", "dark") or "dark",
         )
 
     def update_settings(self, payload: SettingsUpdateRequest) -> None:
+        if not payload.active_model.strip():
+            raise ValueError("Choose a model before saving settings.")
+        allowed_themes = {"dark", "dark-brown"}
+        if payload.theme not in allowed_themes:
+            raise ValueError("Invalid theme value.")
         self.set_app_setting("active_model", payload.active_model)
+        self.set_app_setting("theme", payload.theme)
 
     def list_genres(self) -> list[GenreRecord]:
         with self.connection() as connection:
@@ -645,6 +668,7 @@ class Database:
             AlbumListRecord.model_validate(
                 {
                     **dict(row),
+                    "genres": _parse_genres_db(row["genre_filter_hint"]),
                     "items": [item.model_dump() for item in items_by_list.get(int(row["id"]), [])],
                 }
             )
@@ -659,19 +683,21 @@ class Database:
 
     def create_list(self, payload: AlbumListUpsert) -> AlbumListRecord:
         now = utc_now_iso()
+        genres_json = json.dumps(payload.genres)
         with self.connection() as connection:
             cursor = connection.execute(
                 """
                 INSERT INTO album_lists(name, description, year, genre_filter_hint, is_auto, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (payload.name, payload.description, payload.year, payload.genre_filter_hint, int(getattr(payload, 'is_auto', False)), now, now),
+                (payload.name, payload.description, payload.year, genres_json, int(getattr(payload, 'is_auto', False)), now, now),
             )
             list_id = int(cursor.lastrowid)
         return self.get_list(list_id)
 
     def update_list(self, list_id: int, payload: AlbumListUpsert) -> AlbumListRecord:
         self.get_list(list_id)
+        genres_json = json.dumps(payload.genres)
         with self.connection() as connection:
             connection.execute(
                 """
@@ -679,7 +705,7 @@ class Database:
                 SET name = ?, description = ?, year = ?, genre_filter_hint = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (payload.name, payload.description, payload.year, payload.genre_filter_hint, utc_now_iso(), list_id),
+                (payload.name, payload.description, payload.year, genres_json, utc_now_iso(), list_id),
             )
         return self.get_list(list_id)
 
@@ -692,8 +718,14 @@ class Database:
         self.get_album(album_id)
         lst = self.get_list(list_id)
         if lst.is_auto:
-            raise ValueError("Cannot manually add albums to an auto list.")
+            raise ValueError("This automatic list cannot be edited manually. Regenerate it instead.")
         with self.connection() as connection:
+            existing = connection.execute(
+                "SELECT 1 FROM list_items WHERE list_id = ? AND album_id = ?",
+                (list_id, album_id),
+            ).fetchone()
+            if existing:
+                raise ValueError("That album is already in this list.")
             next_rank = connection.execute(
                 "SELECT COALESCE(MAX(rank_position), 0) + 1 AS next_rank FROM list_items WHERE list_id = ?",
                 (list_id,),
@@ -702,7 +734,6 @@ class Database:
                 """
                 INSERT INTO list_items(list_id, album_id, rank_position)
                 VALUES (?, ?, ?)
-                ON CONFLICT(list_id, album_id) DO NOTHING
                 """,
                 (list_id, album_id, next_rank),
             )
@@ -765,9 +796,11 @@ class Database:
         if payload.year is not None:
             filters.append("release_year = ?")
             params.append(payload.year)
-        if payload.genre:
-            filters.append("LOWER(genre) LIKE LOWER(?)")
-            params.append(f"%{payload.genre}%")
+        if payload.genres:
+            genre_conditions = " OR ".join("LOWER(genre) LIKE LOWER(?)" for _ in payload.genres)
+            filters.append(f"({genre_conditions})")
+            for g in payload.genres:
+                params.append(f"%{g}%")
         where = " AND ".join(filters)
         params.append(payload.limit)
         with self.connection() as connection:
@@ -787,14 +820,23 @@ class Database:
                 params,
             ).fetchall()
             album_ids = [row["id"] for row in rows]
+            if not album_ids:
+                filter_parts = []
+                if payload.year is not None:
+                    filter_parts.append(f"from {payload.year}")
+                if payload.genres:
+                    filter_parts.append(f"matching '{', '.join(payload.genres)}'")
+                suffix = f" {' and '.join(filter_parts)}" if filter_parts else ""
+                raise ValueError(f"No rated albums{suffix}. Rate matching albums first, then generate the list.")
             existing = connection.execute(
                 "SELECT id, name FROM album_lists WHERE name = ?", (payload.name,)
             ).fetchone()
+            genres_json = json.dumps(payload.genres)
             if existing and payload.update_existing:
                 list_id = existing["id"]
                 connection.execute(
                     "UPDATE album_lists SET year = ?, genre_filter_hint = ?, auto_limit = ?, updated_at = ? WHERE id = ?",
-                    (payload.year, payload.genre, payload.limit, utc_now_iso(), list_id),
+                    (payload.year, genres_json, payload.limit, utc_now_iso(), list_id),
                 )
                 connection.execute("DELETE FROM list_items WHERE list_id = ?", (list_id,))
             elif existing and not payload.update_existing:
@@ -803,7 +845,7 @@ class Database:
                 now = utc_now_iso()
                 cursor = connection.execute(
                     "INSERT INTO album_lists(name, year, genre_filter_hint, auto_limit, is_auto, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
-                    (payload.name, payload.year, payload.genre, payload.limit, now, now),
+                    (payload.name, payload.year, genres_json, payload.limit, now, now),
                 )
                 list_id = int(cursor.lastrowid)
             for rank, album_id in enumerate(album_ids, start=1):

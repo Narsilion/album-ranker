@@ -16,6 +16,159 @@ def _script_blocks(html: str) -> str:
     return "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", html, re.DOTALL))
 
 
+def _strip_js(code: str) -> str:
+    """Strip strings, template literals, comments, and regex literals from JS.
+
+    Uses a character-by-character scan with a ``last_tok_end`` tracker so that
+    ``'"'`` (single-quoted double-quote), template literal ``${…}`` bodies, and
+    regex literals like ``/^(\\d+)[.):]?/`` are all handled correctly.
+
+    The standard "last non-whitespace character" heuristic is used to tell
+    regex literals apart from division operators: ``/`` is a regex when the
+    preceding meaningful token is an operator or opener (``= ( [ { , ; ! …``),
+    not an identifier/number/closer (``a 1 ) ] }``).
+    """
+    result: list[str] = []
+    i, n = 0, len(code)
+    last_tok = ""  # last non-whitespace char appended to result
+
+    while i < n:
+        ch = code[i]
+
+        # Line comment
+        if ch == "/" and i + 1 < n and code[i + 1] == "/":
+            while i < n and code[i] != "\n":
+                i += 1
+            continue
+
+        # Block comment
+        if ch == "/" and i + 1 < n and code[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (code[i] == "*" and code[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+
+        # Regex literal: / that is NOT preceded by ) ] } or an identifier char.
+        if ch == "/" and i + 1 < n and code[i + 1] not in ("/", "*"):
+            if last_tok not in (")", "]", "}") and not (last_tok.isalnum() or last_tok == "_"):
+                i += 1  # skip opening /
+                while i < n:
+                    c2 = code[i]
+                    if c2 == "\n":
+                        break  # unterminated (shouldn't occur in valid code)
+                    if c2 == "\\":
+                        i += 2
+                        continue
+                    if c2 == "[":  # character class — skip until ]
+                        i += 1
+                        while i < n and code[i] != "]":
+                            if code[i] == "\\":
+                                i += 1
+                            i += 1
+                        if i < n:
+                            i += 1  # skip ]
+                        continue
+                    if c2 == "/":
+                        i += 1
+                        break
+                    i += 1
+                while i < n and code[i].isalpha():  # skip flags g i m s u y
+                    i += 1
+                result.append('""')
+                last_tok = '"'
+                continue
+
+        # String / template literal — skip contents entirely so ${…} inside
+        # template literals doesn't contribute stray brace counts.
+        if ch in ('"', "'", "`"):
+            q, i = ch, i + 1
+            while i < n:
+                if code[i] == "\\":
+                    i += 2
+                    continue
+                if code[i] == q:
+                    i += 1
+                    break
+                i += 1
+            result.append('""')
+            last_tok = '"'
+            continue
+
+        if not ch.isspace():
+            last_tok = ch
+        result.append(ch)
+        i += 1
+
+    return "".join(result)
+
+
+def _check_js_syntax(html: str, page_label: str = "") -> None:
+    """Verify every <script> block in *html* passes two structural checks:
+
+    1. **Brace balance** — {}, [], and () counts are equal.  Catches cases
+       where a template edit accidentally duplicates or drops a delimiter.
+
+    2. **} else follows an if block** — for every ``} else`` occurrence the
+       block immediately preceding ``}`` must have been opened by an ``if``
+       keyword, not by ``catch``, ``try``, ``for``, etc.  This catches the
+       exact class of bug where a ``catch (err) { if (…) { … } else { … } }``
+       is edited down to ``catch (err) { … } else { … }`` — which is a
+       hard ``SyntaxError`` that silently breaks all JS on the page.
+    """
+    prefix = f"{page_label}: " if page_label else ""
+    blocks = re.findall(r"<script[^>]*>(.*?)</script>", html, re.DOTALL)
+    for idx, raw in enumerate(blocks):
+        stripped = _strip_js(raw)
+
+        # ── 1. Brace balance ────────────────────────────────────────────────
+        for opening, closing in (("{", "}"), ("[", "]"), ("(", ")")):
+            delta = stripped.count(opening) - stripped.count(closing)
+            assert delta == 0, (
+                f"{prefix}script[{idx}]: unbalanced {opening}{closing} (delta={delta:+d})"
+            )
+
+        # ── 2. } else must follow an if block ───────────────────────────────
+        for m in re.finditer(r"\}\s*else\b", stripped):
+            close_pos = m.start()
+            # Walk backward to find the { that this } closes.
+            depth, j = 1, close_pos - 1
+            while j >= 0 and depth > 0:
+                if stripped[j] == "}":
+                    depth += 1
+                elif stripped[j] == "{":
+                    depth -= 1
+                j -= 1
+            open_brace = j + 1  # position of the matching {
+
+            # Find the keyword that precedes the {.
+            j = open_brace - 1
+            while j >= 0 and stripped[j] in " \t\n\r":
+                j -= 1
+            # The { may be preceded by a closing ) from a condition — skip it.
+            if j >= 0 and stripped[j] == ")":
+                depth = 1
+                j -= 1
+                while j >= 0 and depth > 0:
+                    if stripped[j] == ")":
+                        depth += 1
+                    elif stripped[j] == "(":
+                        depth -= 1
+                    j -= 1
+                while j >= 0 and stripped[j] in " \t\n\r":
+                    j -= 1
+            # Extract the alphanumeric keyword ending at j.
+            end = j + 1
+            while j >= 0 and (stripped[j].isalnum() or stripped[j] == "_"):
+                j -= 1
+            keyword = stripped[j + 1 : end]
+            assert keyword == "if", (
+                f"{prefix}script[{idx}]: '}} else' at offset {close_pos} follows "
+                f"a '{keyword}' block — expected 'if'. "
+                f"Likely a truncated if/else clause inside a catch/try block."
+            )
+
+
 def _create_album(client, *, artist_name="Band", title="Album", description="A description.\nWith newlines & \"quotes\".") -> dict:
     return client.post(
         "/api/albums",
@@ -322,13 +475,13 @@ def test_lists_page_supports_create_add_and_reorder(client) -> None:
 def test_list_details_can_be_renamed(client) -> None:
     created_list = client.post(
         "/api/lists",
-        json={"name": "Top 2026 Black Metal", "description": "Ranking", "year": 2026, "genre_filter_hint": "Black Metal"},
+        json={"name": "Top 2026 Black Metal", "description": "Ranking", "year": 2026, "genres": ["Black Metal"]},
     )
     list_id = created_list.json()["id"]
 
     updated = client.put(
         f"/api/lists/{list_id}",
-        json={"name": "Top 2026 Gothic Metal", "description": "Updated", "year": 2026, "genre_filter_hint": "Gothic Metal"},
+        json={"name": "Top 2026 Gothic Metal", "description": "Updated", "year": 2026, "genres": ["Gothic Metal"]},
     )
 
     assert updated.status_code == 200
@@ -434,14 +587,21 @@ def test_patch_album_rating(client) -> None:
         },
     ).json()
     album_id = album["id"]
+    client.patch(f"/api/albums/{album_id}/bookmark", json={"bookmarked": True})
 
     patched = client.patch(f"/api/albums/{album_id}/rating", json={"rating": 9})
     assert patched.status_code == 200
-    assert patched.json()["rating"] == 9
+    patched_json = patched.json()
+    assert patched_json["rating"] == 9
+    assert patched_json["listened_at"] is not None
+    assert patched_json["bookmarked_at"] is None
 
     cleared = client.patch(f"/api/albums/{album_id}/rating", json={"rating": None})
     assert cleared.status_code == 200
-    assert cleared.json()["rating"] is None
+    cleared_json = cleared.json()
+    assert cleared_json["rating"] is None
+    assert cleared_json["listened_at"] == patched_json["listened_at"]
+    assert cleared_json["bookmarked_at"] is None
 
 
 def test_bookmarks_page_and_listened_workflow(client) -> None:
@@ -456,8 +616,8 @@ def test_bookmarks_page_and_listened_workflow(client) -> None:
     assert bookmarked.json()["listened_at"] is None
     assert bookmarks_page.status_code == 200
     assert "Wyrd" in bookmarks_page.text
-    assert 'data-remove-on-listened="true"' in bookmarks_page.text
-    assert 'class="secondary album-bookmark-toggle"' not in bookmarks_page.text
+    assert 'class="secondary album-bookmark-toggle"' in bookmarks_page.text
+    assert "Remove from Later" in bookmarks_page.text
     assert "move-up" not in bookmarks_page.text
     assert "Album Import" not in bookmarks_page.text
 
@@ -469,8 +629,8 @@ def test_bookmarks_page_and_listened_workflow(client) -> None:
     assert listened.json()["listened_at"] is not None
     assert listened.json()["bookmarked_at"] is not None
     assert album_after_listened["title"] == "Wyrd"
-    assert "Wyrd" not in bookmarks_after_listened.text
-    assert "No bookmarked albums yet" in bookmarks_after_listened.text
+    assert "Wyrd" in bookmarks_after_listened.text
+    assert 'id="bookmarkEmpty" class="muted hidden"' in bookmarks_after_listened.text
 
     unlistened = client.patch(f"/api/albums/{album_id}/listened", json={"listened": False})
     assert unlistened.status_code == 200
@@ -483,6 +643,13 @@ def test_bookmarks_page_and_listened_workflow(client) -> None:
     assert unbookmarked.json()["bookmarked_at"] is None
     assert "Wyrd" not in client.get("/bookmarks").text
 
+    client.patch(f"/api/albums/{album_id}/listened", json={"listened": True})
+    rebookmarked_listened = client.patch(f"/api/albums/{album_id}/bookmark", json={"bookmarked": True})
+    assert rebookmarked_listened.status_code == 200
+    assert rebookmarked_listened.json()["listened_at"] is not None
+    assert rebookmarked_listened.json()["bookmarked_at"] is not None
+    assert "Wyrd" in client.get("/bookmarks").text
+
 
 def test_bookmark_and_listened_missing_album_returns_404(client) -> None:
     bookmark = client.patch("/api/albums/99999/bookmark", json={"bookmarked": True})
@@ -492,7 +659,7 @@ def test_bookmark_and_listened_missing_album_returns_404(client) -> None:
     assert listened.status_code == 404
 
 
-def test_bookmarked_album_detail_shows_single_mark_listened_action(client) -> None:
+def test_bookmarked_album_detail_shows_independent_bookmark_and_listened_actions(client) -> None:
     album = _create_album(client, artist_name="Vanir", title="Wyrd")
     album_id = album["id"]
     client.patch(f"/api/albums/{album_id}/bookmark", json={"bookmarked": True})
@@ -501,7 +668,8 @@ def test_bookmarked_album_detail_shows_single_mark_listened_action(client) -> No
 
     assert page.status_code == 200
     assert 'class="secondary album-listened-toggle"' in page.text
-    assert 'class="secondary album-bookmark-toggle"' not in page.text
+    assert 'class="secondary album-bookmark-toggle"' in page.text
+    assert "Remove from Later" in page.text
     assert "Mark Listened" in page.text
 
 
@@ -518,6 +686,10 @@ def test_list_pages_expose_album_bookmark_controls(client) -> None:
     assert list_detail_page.status_code == 200
     assert 'class="secondary album-bookmark-toggle"' in lists_page.text
     assert 'class="secondary album-bookmark-toggle"' in list_detail_page.text
+    assert "Save for Later" in lists_page.text
+    assert "Save for Later" in list_detail_page.text
+    assert 'class="secondary album-listened-toggle"' not in lists_page.text
+    assert 'class="secondary album-listened-toggle"' not in list_detail_page.text
 
 
 def test_upload_album_cover(client, tmp_path) -> None:
@@ -871,6 +1043,27 @@ def test_delete_artist_removes_existing_artist_and_albums(client) -> None:
     assert client.get("/api/artists").json() == []
 
 
+def test_validation_errors_are_user_readable(client) -> None:
+    response = client.post(
+        "/api/albums",
+        json={
+            "artist_name": " ",
+            "title": " ",
+            "release_year": 26,
+            "rating": 11,
+            "tracks": [{"track_number": 1, "title": " "}],
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "Artist name is required" in detail
+    assert "Album title is required" in detail
+    assert "Release year must be a four-digit year" in detail
+    assert "Rating must be between 1 and 10" in detail
+    assert "Track title is required" in detail
+
+
 def test_delete_list_removes_existing_list(client) -> None:
     created_list = client.post(
         "/api/lists",
@@ -883,6 +1076,43 @@ def test_delete_list_removes_existing_list(client) -> None:
     assert deleted.status_code == 200
     assert deleted.json() == {"ok": True}
     assert client.get("/api/lists").json() == []
+
+
+def test_duplicate_list_item_returns_clear_message(client) -> None:
+    album = _create_album(client, artist_name="Vanir", title="Wyrd")
+    list_id = client.post("/api/lists", json={"name": "Favorites"}).json()["id"]
+
+    first = client.post(f"/api/lists/{list_id}/items", json={"album_id": album["id"]})
+    duplicate = client.post(f"/api/lists/{list_id}/items", json={"album_id": album["id"]})
+
+    assert first.status_code == 200
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "That album is already in this list."
+
+
+def test_empty_best_rated_auto_list_explains_missing_matches(client) -> None:
+    response = client.post(
+        "/api/auto-lists/best-rated",
+        json={"name": "Best Rated Doom 2026", "year": 2026, "genres": ["Doom"], "limit": 10},
+    )
+
+    assert response.status_code == 409
+    assert "No rated albums from 2026 and matching 'Doom'" in response.json()["detail"]
+
+
+def test_invalid_settings_model_returns_clear_message(client) -> None:
+    response = client.put("/api/settings", json={"active_model": "not-a-real-model"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "That model is not in the available model list. Pick one from the menu."
+
+
+def test_missing_html_album_page_uses_friendly_error_page(client) -> None:
+    response = client.get("/albums/9999")
+
+    assert response.status_code == 404
+    assert "Album Not Found" in response.text
+    assert "Back To Albums" in response.text
 
 
 # ── JS safety: no raw _escape() injected into script blocks ──────────────────
@@ -915,6 +1145,35 @@ def test_artist_detail_page_script_blocks_are_valid_when_description_has_special
     assert page.status_code == 200
     scripts = _script_blocks(page.text)
     assert 'Line one.\nLine two' not in scripts
+
+
+# ── JS brace balance: all main pages ─────────────────────────────────────────
+
+def test_all_pages_have_balanced_script_braces(client) -> None:
+    """Every rendered page must have balanced {}/[]/()'s in all <script> blocks.
+    Catches the class of error where an if/else branch is accidentally dropped
+    during a template edit, leaving a bare '} else {' that breaks the whole
+    script (as happened on the lists page)."""
+    album = _create_album(client)
+    artists = client.get("/api/artists").json()
+    artist_id = artists[0]["id"]
+    list_resp = client.post("/api/lists", json={"name": "Test List", "genres": []}).json()
+    list_id = list_resp["id"]
+
+    pages = [
+        ("/albums", "albums"),
+        ("/artists", "artists"),
+        (f"/artists/{artist_id}", "artist detail"),
+        (f"/albums/{album['id']}", "album detail"),
+        ("/lists", "lists"),
+        (f"/lists/{list_id}", "list detail"),
+        ("/genres", "genres"),
+        ("/settings", "settings"),
+    ]
+    for url, label in pages:
+        resp = client.get(url)
+        assert resp.status_code == 200, f"{label}: unexpected status {resp.status_code}"
+        _check_js_syntax(resp.text, label)
 
 
 # ── import-confirm redirects to album page ────────────────────────────────────

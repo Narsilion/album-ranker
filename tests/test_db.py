@@ -30,7 +30,7 @@ def test_database_initializes_and_reorders_list_items(settings) -> None:
         )
     )
     created_list = db.create_list(
-        AlbumListUpsert(name="Top 2026 Black Metal", description="Best of the year", year=2026, genre_filter_hint="Black Metal")
+        AlbumListUpsert(name="Top 2026 Black Metal", description="Best of the year", year=2026, genres=["Black Metal"])
     )
     db.add_album_to_list(created_list.id, first.id)
     ranked = db.add_album_to_list(created_list.id, second.id)
