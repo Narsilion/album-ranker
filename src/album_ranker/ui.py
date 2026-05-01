@@ -2574,11 +2574,12 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
     star_initial_label = f"{album.rating}/10" if album.rating else "Rate this album"
     cover_action_label = "Change cover" if album.cover_image_path else "Upload cover"
     cover_action_title = "Click to change the cover image" if album.cover_image_path else "Click to upload a cover image"
+    album_title_line = album.title + (f" - {album.release_year}" if album.release_year else "")
     body = f"""
       <section class="hero">
         <div class="eyebrow">Album Details</div>
         <h1><a href="/artists/{album.artist_id}" style="text-decoration:none;">{_escape(album.artist_name)}</a></h1>
-        <p>{_escape(album.title)} {_escape(str(album.release_year or ''))}</p>
+        <p>{_escape(album_title_line)}</p>
       </section>
       <section class="detail-layout">
         <div>
