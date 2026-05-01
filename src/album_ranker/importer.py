@@ -1506,6 +1506,12 @@ class MetadataImporter:
 
 
 class CoverDownloader:
+    _IMAGE_HEADERS = {
+        "User-Agent": DEFAULT_HEADERS["User-Agent"],
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Language": DEFAULT_HEADERS["Accept-Language"],
+    }
+
     def __init__(self, cover_dir: Path) -> None:
         self.cover_dir = cover_dir
 
@@ -1517,9 +1523,13 @@ class CoverDownloader:
         suffix = Path(parsed.path).suffix or ".jpg"
         safe_stem = re.sub(r"[^a-zA-Z0-9_.-]", "-", stem)
         target = self.cover_dir / f"{safe_stem}{suffix[:8]}"
-        request = Request(url, headers=DEFAULT_HEADERS)
+        request = Request(url, headers=self._IMAGE_HEADERS)
         with urlopen(request, timeout=30) as response:
-            target.write_bytes(response.read())
+            data = response.read()
+        if not data[:2] == b"\xff\xd8" and not data[:8] == b"\x89PNG\r\n\x1a\n" and not data[:4] in (b"RIFF", b"webp"):
+            # Received HTML or unexpected content instead of an image; discard it
+            return None
+        target.write_bytes(data)
         return str(target)
 
 
