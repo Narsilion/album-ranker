@@ -203,8 +203,6 @@ class SparseAlbumImporter(MetadataImporter):
         return ArtistDraftData(
             artist_name=request.artist_name or "For My Pain...",
             description=None,
-            description_source_url=request.source_url,
-            description_source_label="www.metal-archives.com",
             external_url=request.source_url,
             origin="Finland, Oulu",
             genre="Gothic Metal/Rock",
@@ -223,8 +221,6 @@ def test_manual_album_create_and_render_pages(client) -> None:
         json={
             "artist_name": "Scythe of Mephisto",
             "artist_description": "Atmospheric black metal band.",
-            "artist_description_source_url": "https://example.com/wiki",
-            "artist_description_source_label": "Wikipedia",
             "album_external_url": "https://example.com/album",
             "title": "Till Life Do Us Part - EP",
             "release_year": 2026,
@@ -387,8 +383,6 @@ def test_import_confirm_uses_edited_payload_and_downloads_cover(client) -> None:
             "payload": {
                 "artist_name": "Scythe of Mephisto",
                 "artist_description": "Edited description from user review",
-                "artist_description_source_url": "https://example.com/wiki",
-                "artist_description_source_label": "Wikipedia",
                 "album_external_url": "https://example.com/album",
                 "title": "Till Life Do Us Part - EP",
                 "release_year": 2026,
@@ -777,8 +771,6 @@ def test_artist_origin_is_stored_and_returned(client) -> None:
         json={
             "name": "Mumford & Sons",
             "description": "British folk rock band.",
-            "description_source_url": "https://en.wikipedia.org/wiki/Mumford_%26_Sons",
-            "description_source_label": "Wikipedia",
             "external_url": "https://mumfordandsons.com",
             "origin": "London, UK",
         },
@@ -796,8 +788,6 @@ def test_artist_origin_is_stored_and_returned(client) -> None:
         json={
             "name": "Mumford & Sons",
             "description": "British folk rock band.",
-            "description_source_url": None,
-            "description_source_label": None,
             "external_url": None,
             "origin": "London, England",
         },
@@ -814,8 +804,6 @@ def test_confirm_artist_import_updates_existing_artist_instead_of_crashing(clien
         json={
             "name": "Vanir",
             "description": "Existing description",
-            "description_source_url": "https://example.com/old",
-            "description_source_label": "old",
             "external_url": "https://example.com/old-artist",
         },
     )
@@ -838,8 +826,6 @@ def test_confirm_artist_import_updates_existing_artist_instead_of_crashing(clien
             "payload": {
                 "name": "Vanir",
                 "description": "Updated description",
-                "description_source_url": "https://example.com/new",
-                "description_source_label": "new",
                 "external_url": "https://example.com/new-artist",
             },
         },
@@ -877,8 +863,6 @@ def test_confirm_album_import_derives_cover_from_album_external_url(client, monk
             "payload": {
                 "artist_name": "Vanir",
                 "artist_description": None,
-                "artist_description_source_url": "https://example.com/album-page",
-                "artist_description_source_label": "example.com",
                 "album_external_url": "https://example.com/album-page",
                 "title": "Wyrd",
                 "release_year": 2026,
@@ -964,8 +948,6 @@ def test_confirm_album_import_updates_existing_album_instead_of_creating_duplica
             "payload": {
                 "artist_name": "Vanir",
                 "artist_description": None,
-                "artist_description_source_url": "https://www.metal-archives.com/albums/Vanir/Wyrd/1396086",
-                "artist_description_source_label": "www.metal-archives.com",
                 "album_external_url": "https://www.metal-archives.com/albums/Vanir/Wyrd/1396086",
                 "title": "Wyrd",
                 "release_year": 2026,
@@ -1197,8 +1179,6 @@ def test_import_confirm_album_returns_album_id_for_redirect(client) -> None:
             "payload": {
                 "artist_name": "Scythe of Mephisto",
                 "artist_description": None,
-                "artist_description_source_url": None,
-                "artist_description_source_label": None,
                 "album_external_url": "https://example.com/album",
                 "title": "Till Life Do Us Part - EP",
                 "release_year": 2026,
@@ -1367,8 +1347,6 @@ def test_album_with_existing_artist_import_skips_artist_draft(client, monkeypatc
         json={
             "name": "For My Pain...",
             "description": None,
-            "description_source_url": None,
-            "description_source_label": None,
             "external_url": "https://www.metal-archives.com/bands/For_My_Pain.../1020",
             "origin": None,
         },
@@ -1420,8 +1398,6 @@ def test_album_with_artist_confirm_creates_artist_and_album(client, monkeypatch)
             "artist_payload": {
                 "name": "For My Pain...",
                 "description": "Edited artist description",
-                "description_source_url": "https://www.metal-archives.com/bands/For_My_Pain.../1020",
-                "description_source_label": "www.metal-archives.com",
                 "external_url": "https://www.metal-archives.com/bands/For_My_Pain.../1020",
                 "origin": "Finland, Oulu",
             },
@@ -1430,8 +1406,6 @@ def test_album_with_artist_confirm_creates_artist_and_album(client, monkeypatch)
             "album_payload": {
                 "artist_name": "For My Pain...",
                 "artist_description": "Edited artist description",
-                "artist_description_source_url": "https://www.metal-archives.com/bands/For_My_Pain.../1020",
-                "artist_description_source_label": "www.metal-archives.com",
                 "album_external_url": "https://www.metal-archives.com/albums/For_My_Pain.../Buried_Blue/1391127",
                 "album_stream_url": None,
                 "album_type": "Single",
@@ -1488,35 +1462,33 @@ def test_album_with_artist_confirm_updates_existing_album(client, monkeypatch) -
         },
     ).json()
 
-    confirm = client.post(
-        "/api/import/album-with-artist/confirm",
+    assert draft_response["album_exists"] is True
+    assert draft_response["album_draft"] is None
+    assert draft_response["existing_album"]["id"] == existing["id"]
+
+    confirm = client.put(
+        f"/api/albums/{existing['id']}",
         json={
-            "album_draft_id": draft_response["album_draft"]["id"],
-            "album_chosen_source_url": "https://www.metal-archives.com/albums/For_My_Pain.../Buried_Blue/1391127",
-            "album_payload": {
-                "artist_name": "For My Pain...",
-                "artist_description": None,
-                "artist_description_source_url": None,
-                "artist_description_source_label": None,
-                "album_external_url": "https://www.metal-archives.com/albums/For_My_Pain.../Buried_Blue/1391127",
-                "album_stream_url": None,
-                "album_type": "Single",
-                "title": "Buried Blue",
-                "release_year": 2026,
-                "genre": "Gothic Metal",
-                "rating": None,
-                "duration_seconds": 2520,
-                "cover_image_path": None,
-                "cover_source_url": None,
-                "notes": "Updated",
-                "tracks": [],
-            },
+            "artist_name": "For My Pain...",
+            "artist_description": None,
+            "album_external_url": "https://www.metal-archives.com/albums/For_My_Pain.../Buried_Blue/1391127",
+            "album_stream_url": None,
+            "album_type": "Single",
+            "title": "Buried Blue",
+            "release_year": 2026,
+            "genre": "Gothic Metal",
+            "rating": None,
+            "duration_seconds": 2520,
+            "cover_image_path": None,
+            "cover_source_url": None,
+            "notes": "Updated",
+            "tracks": [],
         },
     )
 
     assert confirm.status_code == 200
-    assert confirm.json()["album"]["id"] == existing["id"]
-    assert confirm.json()["album"]["notes"] == "Updated"
+    assert confirm.json()["id"] == existing["id"]
+    assert confirm.json()["notes"] == "Updated"
     assert len(client.get("/api/albums").json()) == 1
 
 
@@ -1566,8 +1538,6 @@ def test_album_refresh_via_import_draft_then_put(client) -> None:
             "album_external_url": draft_payload.get("album_external_url"),
             "album_stream_url": None,
             "artist_description": draft_payload.get("artist_description"),
-            "artist_description_source_url": draft_payload.get("artist_description_source_url"),
-            "artist_description_source_label": draft_payload.get("artist_description_source_label"),
             "artist_origin": None,
             "rating": None,
             "notes": draft_payload.get("notes"),
@@ -1599,8 +1569,6 @@ def test_artist_refresh_via_import_draft_then_put(client) -> None:
         json={
             "name": draft_payload["artist_name"],
             "description": draft_payload.get("description"),
-            "description_source_url": draft_payload.get("description_source_url"),
-            "description_source_label": draft_payload.get("description_source_label"),
             "external_url": draft_payload.get("external_url"),
             "origin": draft_payload.get("origin"),
         },

@@ -131,6 +131,25 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           radial-gradient(circle at right, rgba(130, 90, 50, 0.18), transparent 24%),
           linear-gradient(180deg, #100c06, #1a1108 42%, #130e07);
       }}
+      [data-theme="dark-green"] {{
+        --bg: #060e09;
+        --bg-elevated: #0b1610;
+        --panel: #0e1d13;
+        --panel-strong: #132619;
+        --panel-soft: rgba(14, 29, 19, 0.82);
+        --ink: #eef5ef;
+        --muted: #7aaa88;
+        --line: rgba(120, 180, 140, 0.14);
+        --accent: #4ecb7a;
+        --accent-strong: #72e096;
+        --success: #3ab86a;
+        --danger: #c85a55;
+        --shadow: 0 28px 80px rgba(0, 0, 0, 0.38);
+        --body-bg:
+          radial-gradient(circle at top left, rgba(78, 203, 122, 0.10), transparent 24%),
+          radial-gradient(circle at right, rgba(30, 90, 55, 0.18), transparent 24%),
+          linear-gradient(180deg, #050d08, #091409 42%, #060e08);
+      }}
       * {{ box-sizing: border-box; }}
       body {{
         margin: 0;
@@ -891,6 +910,7 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
       function validateRating(value) {{
         if (value === null || value === undefined || value === "") return null;
         const rating = Number(value);
+        if (Number(value) === 0) return null;
         if (!Number.isInteger(rating) || rating < 1 || rating > 10) throw new Error("Rating must be between 1 and 10.");
         return rating;
       }}
@@ -1242,14 +1262,6 @@ def render_artists_page(
                 <textarea id="artistConfirmDescription" name="description" placeholder="Description"></textarea>
               </div>
               <div class="form-field">
-                <label class="form-label" for="artistConfirmDescriptionSourceUrl">Description Source URL</label>
-                <input id="artistConfirmDescriptionSourceUrl" name="description_source_url" placeholder="Description source URL">
-              </div>
-              <div class="form-field">
-                <label class="form-label" for="artistConfirmDescriptionSourceLabel">Description Source Label</label>
-                <input id="artistConfirmDescriptionSourceLabel" name="description_source_label" placeholder="Description source label">
-              </div>
-              <div class="form-field">
                 <label class="form-label" for="artistConfirmPageUrl">Artist Page URL</label>
                 <input id="artistConfirmPageUrl" name="external_url" placeholder="Official site, Wikipedia, or main reference page">
               </div>
@@ -1267,8 +1279,6 @@ def render_artists_page(
           <div class="panel-title">Manual Artist</div>
           <form id="artistForm">
             <input type="hidden" name="artist_id">
-            <input type="hidden" name="description_source_url">
-            <input type="hidden" name="description_source_label">
             <div class="form-field">
               <label class="form-label" for="artistFormName">Artist Name</label>
               <input id="artistFormName" name="name" placeholder="Artist name" required>
@@ -1342,8 +1352,6 @@ def render_artists_page(
           artistForm.artist_id.value = data.id || "";
           artistForm.name.value = data.name || data.artist_name || "";
           artistForm.description.value = data.description || "";
-          artistForm.description_source_url.value = data.description_source_url || "";
-          artistForm.description_source_label.value = data.description_source_label || "";
           artistForm.external_url.value = data.external_url || "";
           artistForm.origin.value = data.origin || "";
         }}
@@ -1354,8 +1362,6 @@ def render_artists_page(
           artistConfirmForm.draft_id.value = draft.id;
           artistConfirmForm.name.value = draft.draft_payload.artist_name || "";
           artistConfirmForm.description.value = draft.draft_payload.description || "";
-          artistConfirmForm.description_source_url.value = draft.draft_payload.description_source_url || draft.chosen_source_url || "";
-          artistConfirmForm.description_source_label.value = draft.draft_payload.description_source_label || "";
           artistConfirmForm.external_url.value = draft.draft_payload.external_url || "";
           artistConfirmForm.origin.value = draft.draft_payload.origin || "";
           // duplicate detection
@@ -1409,8 +1415,6 @@ def render_artists_page(
             const payload = {{
               name: artistForm.name.value.trim(),
               description: artistForm.description.value.trim() || null,
-              description_source_url: artistForm.description_source_url.value.trim() || null,
-              description_source_label: artistForm.description_source_label.value.trim() || null,
               external_url: validateUrl(artistForm.external_url.value, "Artist page URL"),
               origin: artistForm.origin.value.trim() || null,
             }};
@@ -1481,12 +1485,10 @@ def render_artists_page(
               method: "POST",
               body: JSON.stringify({{
                 target_type: "artist",
-                chosen_source_url: validateUrl(artistConfirmForm.description_source_url.value, "Description source URL"),
+                chosen_source_url: validateUrl(artistConfirmForm.external_url.value, "Artist page URL"),
                 payload: {{
                   name: artistConfirmForm.name.value.trim(),
                   description: artistConfirmForm.description.value.trim() || null,
-                  description_source_url: validateUrl(artistConfirmForm.description_source_url.value, "Description source URL"),
-                  description_source_label: artistConfirmForm.description_source_label.value.trim() || null,
                   external_url: validateUrl(artistConfirmForm.external_url.value, "Artist page URL"),
                   origin: artistConfirmForm.origin.value.trim() || null,
                 }},
@@ -1556,8 +1558,8 @@ def render_artist_detail_page(
         _album_card_markup(album, show_artist=False, interactive_rating=True) for album in artist.albums
     ) or '<p class="muted">No albums added yet.</p>'
     source_link = (
-        f'<a class="tag" href="{_escape(artist.description_source_url)}" target="_blank" rel="noreferrer">Open Source</a>'
-        if artist.description_source_url
+        f'<a class="tag" href="{_escape(artist.external_url)}" target="_blank" rel="noreferrer">Open Source</a>'
+        if artist.external_url
         else ""
     )
     clamp_id = f"artist-detail-description-{artist.id}"
@@ -1609,14 +1611,6 @@ def render_artist_detail_page(
             <textarea name="description" id="artistRefreshDescription" rows="5" placeholder="Artist description"></textarea>
           </div>
           <div class="form-field">
-            <label class="form-label">Description Source URL</label>
-            <input name="description_source_url" id="artistRefreshDescSrcUrl" placeholder="https://...">
-          </div>
-          <div class="form-field">
-            <label class="form-label">Description Source Label</label>
-            <input name="description_source_label" id="artistRefreshDescSrcLabel" placeholder="e.g. Metal Archives">
-          </div>
-          <div class="form-field">
             <label class="form-label">External URL</label>
             <input name="external_url" id="artistRefreshExternalUrl" placeholder="https://...">
           </div>
@@ -1643,14 +1637,6 @@ def render_artist_detail_page(
           <div class="form-field">
             <label class="form-label" for="artistEditExternalUrl">External URL</label>
             <input id="artistEditExternalUrl" name="external_url" value="{_escape(artist.external_url or '')}" placeholder="https://www.metal-archives.com/bands/...">
-          </div>
-          <div class="form-field">
-            <label class="form-label" for="artistEditDescSrcUrl">Description Source URL</label>
-            <input id="artistEditDescSrcUrl" name="description_source_url" value="{_escape(artist.description_source_url or '')}" placeholder="https://...">
-          </div>
-          <div class="form-field">
-            <label class="form-label" for="artistEditDescSrcLabel">Description Source Label</label>
-            <input id="artistEditDescSrcLabel" name="description_source_label" value="{_escape(artist.description_source_label or '')}" placeholder="e.g. Metal Archives">
           </div>
           <div class="form-field">
             <label class="form-label" for="artistEditDescription">Description</label>
@@ -1697,8 +1683,6 @@ def render_artist_detail_page(
             <input type="hidden" name="draft_id">
             <input type="hidden" name="artist_name" value="{_escape(artist.name)}">
             <input type="hidden" name="artist_description" value="{_escape(artist.description)}">
-            <input type="hidden" name="artist_description_source_url" value="{_escape(artist.description_source_url)}">
-            <input type="hidden" name="artist_description_source_label" value="{_escape(artist.description_source_label)}">
             <div class="form-field">
               <label class="form-label" for="artistAlbumConfirmArtistName">Artist</label>
               <input id="artistAlbumConfirmArtistName" value="{_escape(artist.name)}" disabled>
@@ -1875,8 +1859,6 @@ def render_artist_detail_page(
                 body: JSON.stringify({{
                   name: form.name.value.trim(),
                   description: form.description.value.trim() || null,
-                  description_source_url: form.description_source_url.value.trim() || null,
-                  description_source_label: form.description_source_label.value.trim() || null,
                   external_url: form.external_url.value.trim() || null,
                   origin: form.origin.value.trim() || null,
                 }}),
@@ -1939,8 +1921,6 @@ def render_artist_detail_page(
               document.getElementById("artistRefreshName").value = p.artist_name || '';
               document.getElementById("artistRefreshOrigin").value = p.origin || '';
               document.getElementById("artistRefreshDescription").value = p.description || '';
-              document.getElementById("artistRefreshDescSrcUrl").value = p.description_source_url || '';
-              document.getElementById("artistRefreshDescSrcLabel").value = p.description_source_label || '';
               document.getElementById("artistRefreshExternalUrl").value = p.external_url || '';
               resetRefreshUI();
               status.textContent = "Draft ready \u2014 review below.";
@@ -1969,8 +1949,6 @@ def render_artist_detail_page(
                   body: JSON.stringify({{
                     name: document.getElementById("artistRefreshName").value.trim(),
                     description: document.getElementById("artistRefreshDescription").value.trim() || null,
-                    description_source_url: document.getElementById("artistRefreshDescSrcUrl").value.trim() || null,
-                    description_source_label: document.getElementById("artistRefreshDescSrcLabel").value.trim() || null,
                     external_url: document.getElementById("artistRefreshExternalUrl").value.trim() || null,
                     origin: document.getElementById("artistRefreshOrigin").value.trim() || null,
                   }}),
@@ -2011,8 +1989,6 @@ def render_artist_detail_page(
           return {{
             artist_name: form.artist_name.value.trim(),
             artist_description: form.artist_description.value.trim() || null,
-            artist_description_source_url: validateUrl(form.artist_description_source_url.value, "Artist description source URL"),
-            artist_description_source_label: form.artist_description_source_label.value.trim() || null,
             album_external_url: validateUrl(form.album_external_url.value, "Album source URL"),
             album_stream_url: validateUrl(form.album_stream_url.value, "Stream URL"),
             album_type: form.album_type.value.trim() || null,
@@ -2111,8 +2087,6 @@ def render_artist_detail_page(
           artistAlbumConfirmForm.reset();
           artistAlbumConfirmForm.artist_name.value = {_json(artist.name)};
           artistAlbumConfirmForm.artist_description.value = {_json(artist.description)};
-          artistAlbumConfirmForm.artist_description_source_url.value = {_json(artist.description_source_url)};
-          artistAlbumConfirmForm.artist_description_source_label.value = {_json(artist.description_source_label)};
           artistAlbumConfirmForm.artist_origin.value = {_json(artist.origin)};
           artistAlbumConfirmForm.artist_origin.value = {_json(artist.origin)};
           artistAlbumImportStatus.textContent = "";
@@ -2235,14 +2209,6 @@ def render_imports_page(settings: SettingsRecord) -> str:
               <textarea id="bundleArtistDescription" name="artist_description" placeholder="Description" disabled></textarea>
             </div>
             <div class="form-field">
-              <label class="form-label" for="bundleArtistDescriptionSourceUrl">Description Source URL</label>
-              <input id="bundleArtistDescriptionSourceUrl" name="artist_description_source_url" placeholder="https://..." disabled>
-            </div>
-            <div class="form-field">
-              <label class="form-label" for="bundleArtistDescriptionSourceLabel">Description Source Label</label>
-              <input id="bundleArtistDescriptionSourceLabel" name="artist_description_source_label" placeholder="Source label" disabled>
-            </div>
-            <div class="form-field">
               <label class="form-label" for="bundleArtistExternalUrl">Artist Page URL</label>
               <input id="bundleArtistExternalUrl" name="artist_external_url" placeholder="https://www.metal-archives.com/bands/..." disabled>
             </div>
@@ -2313,8 +2279,6 @@ def render_imports_page(settings: SettingsRecord) -> str:
           "bundleArtistName",
           "bundleArtistOrigin",
           "bundleArtistDescription",
-          "bundleArtistDescriptionSourceUrl",
-          "bundleArtistDescriptionSourceLabel",
           "bundleArtistExternalUrl",
         ];
         let importAbortCtrl = null;
@@ -2356,8 +2320,6 @@ def render_imports_page(settings: SettingsRecord) -> str:
             setValue("bundleArtistName", artist.artist_name || album.artist_name || "");
             setValue("bundleArtistOrigin", artist.origin || "");
             setValue("bundleArtistDescription", artist.description || "");
-            setValue("bundleArtistDescriptionSourceUrl", artist.description_source_url || artistDraft.chosen_source_url || response.artist_source_url || "");
-            setValue("bundleArtistDescriptionSourceLabel", artist.description_source_label || "");
             setValue("bundleArtistExternalUrl", artist.external_url || response.artist_source_url || "");
           }
           setValue("bundleAlbumArtistName", album.artist_name || "");
@@ -2379,8 +2341,6 @@ def render_imports_page(settings: SettingsRecord) -> str:
           return {
             name: value("bundleArtistName"),
             description: value("bundleArtistDescription") || null,
-            description_source_url: value("bundleArtistDescriptionSourceUrl") || null,
-            description_source_label: value("bundleArtistDescriptionSourceLabel") || null,
             external_url: value("bundleArtistExternalUrl") || null,
             origin: value("bundleArtistOrigin") || null,
           };
@@ -2394,8 +2354,6 @@ def render_imports_page(settings: SettingsRecord) -> str:
           return {
             artist_name: artistName,
             artist_description: value("bundleArtistDescription") || null,
-            artist_description_source_url: validateUrl(value("bundleArtistDescriptionSourceUrl"), "Artist description source URL"),
-            artist_description_source_label: value("bundleArtistDescriptionSourceLabel") || null,
             album_external_url: validateUrl(value("bundleAlbumExternalUrl"), "Album source URL"),
             album_stream_url: validateUrl(value("bundleAlbumStreamUrl"), "Stream URL"),
             album_type: value("bundleAlbumType") || null,
@@ -2607,7 +2565,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
     description_title = "Album Description"
     raw_description_text = album.notes or "No description yet."
     description_text = _display_multiline_text(raw_description_text)
-    description_source_url = album.album_external_url or album.artist_description_source_url
+    description_source_url = album.album_external_url
     description_source_label = "Open Source" if description_source_url else ""
     star_buttons = "".join(
         f'<button type="button" class="star-btn{" on" if (album.rating or 0) >= i else ""}" data-value="{i}" aria-label="Rate {i} out of 10">&#9733;</button>'
@@ -2684,8 +2642,6 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             <form id="albumDetailForm">
               <input type="hidden" name="cover_image_path" id="coverImagePathField" value="{_escape(album.cover_image_path or '')}">
               <input type="hidden" name="cover_source_url" value="{_escape(album.cover_source_url)}">
-              <input type="hidden" name="artist_description_source_url" value="{_escape(album.artist_description_source_url)}">
-              <input type="hidden" name="artist_description_source_label" value="{_escape(album.artist_description_source_label)}">
               <div class="form-field">
                 <label class="form-label" for="albumEditExternalUrl">Source URL</label>
                 <input id="albumEditExternalUrl" name="album_external_url" value="{_escape(album.album_external_url)}" placeholder="https://www.metal-archives.com/albums/...">
@@ -3013,8 +2969,6 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
                 body: JSON.stringify({{
                   artist_name: {_json(album.artist_name)},
                   artist_description: {_json(album.artist_description)},
-                  artist_description_source_url: {_json(album.artist_description_source_url)},
-                  artist_description_source_label: {_json(album.artist_description_source_label)},
                   artist_origin: {_json(album.artist_origin)},
                   title: document.getElementById('albumRefreshTitle').value.trim(),
                   release_year: validateYear(document.getElementById('albumRefreshYear').value, 'Release year'),
@@ -3063,8 +3017,6 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
                 artist_name: form.artist_name.value.trim(),
                 artist_origin: form.artist_origin.value.trim() || null,
                 artist_description: form.artist_description.value.trim() || null,
-                artist_description_source_url: validateUrl(form.artist_description_source_url.value, "Artist description source URL"),
-                artist_description_source_label: form.artist_description_source_label.value.trim() || null,
                 album_external_url: validateUrl(form.album_external_url.value, "Album source URL"),
                 album_stream_url: validateUrl(form.album_stream_url.value, "Stream URL"),
                 album_type: form.album_type.value.trim() || null,
@@ -3601,6 +3553,7 @@ def render_settings_page(settings: SettingsRecord) -> str:
     _themes = [
         ("dark", "Dark", "Deep blue-black — the default dark theme."),
         ("dark-brown", "Dark Brown", "Warm dark brown with amber accents."),
+        ("dark-green", "Dark Green", "Deep forest green — dark theme with a green tint."),
     ]
     theme_options = "".join(
         f"""<label class="theme-option{' theme-option--active' if t_val == settings.theme else ''}" data-theme-value="{_escape(t_val)}">

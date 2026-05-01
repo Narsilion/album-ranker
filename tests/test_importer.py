@@ -86,8 +86,6 @@ def test_allcaps_album_title_via_ai_merge_is_normalised(monkeypatch) -> None:
             return {
                 "artist_name": "HIMITZU",
                 "artist_description": None,
-                "artist_description_source_url": None,
-                "artist_description_source_label": None,
                 "album_external_url": None,
                 "album_title": "EXHALE THE PAST // INHALE THE FUTURE",
                 "release_year": 2026,
@@ -126,8 +124,6 @@ def test_mixed_case_title_is_left_unchanged_by_ai_merge(monkeypatch) -> None:
             return {
                 "artist_name": "In Flames",
                 "artist_description": None,
-                "artist_description_source_url": None,
-                "artist_description_source_label": None,
                 "album_external_url": None,
                 "album_title": "Come Clarity",
                 "release_year": 2006,
@@ -182,8 +178,6 @@ def test_best_effort_album_draft_extracts_html_metadata(monkeypatch) -> None:
     assert draft.album_title == "Till Life Do Us Part - EP"
     assert draft.artist_description == "A black metal release with atmospheric textures."
     assert draft.cover_source_url == "https://example.com/cover.jpg"
-    assert draft.artist_description_source_url == "https://example.com/wiki"
-    assert draft.artist_description_source_label == "example.com"
 
 
 def test_best_effort_album_draft_parses_metal_archives_page(monkeypatch) -> None:
@@ -372,7 +366,6 @@ def test_best_effort_artist_draft_parses_metal_archives_band_page(monkeypatch) -
     assert draft.artist_name == "For My Pain..."
     assert draft.external_url == "https://www.metal-archives.com/bands/For_My_Pain.../1020"
     assert draft.description == "Finnish gothic metal band."
-    assert draft.description_source_label == "www.metal-archives.com"
     assert draft.origin == "Finland, Oulu"
     assert draft.genre == "Gothic Metal"
 
@@ -423,8 +416,6 @@ def test_best_effort_artist_draft_extracts_description(monkeypatch) -> None:
 
     assert draft.artist_name == "Scythe of Mephisto"
     assert draft.description == "Scythe of Mephisto is a Serbian black metal project."
-    assert draft.description_source_url == "https://example.com/artist"
-    assert draft.description_source_label == "example.com"
 
 
 def test_best_effort_artist_draft_can_infer_name_from_page_title(monkeypatch) -> None:
@@ -476,8 +467,6 @@ def test_ai_album_draft_is_enriched_with_fallback_when_ai_returns_source_page_as
             return {
                 "artist_name": "Vanir",
                 "artist_description": None,
-                "artist_description_source_url": None,
-                "artist_description_source_label": None,
                 "album_external_url": None,
                 "album_title": "Wyrd",
                 "release_year": None,

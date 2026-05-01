@@ -62,8 +62,6 @@ class TrackRecord(TrackUpsert):
 class ArtistUpsert(BaseModel):
     name: str
     description: str | None = None
-    description_source_url: str | None = None
-    description_source_label: str | None = None
     external_url: str | None = None
     origin: str | None = None
 
@@ -74,8 +72,6 @@ class ArtistUpsert(BaseModel):
 
     @field_validator(
         "description",
-        "description_source_url",
-        "description_source_label",
         "external_url",
         "origin",
         mode="before",
@@ -96,8 +92,6 @@ class ArtistRecord(ArtistUpsert):
 class AlbumUpsert(BaseModel):
     artist_name: str
     artist_description: str | None = None
-    artist_description_source_url: str | None = None
-    artist_description_source_label: str | None = None
     album_external_url: str | None = None
     album_stream_url: str | None = None
     album_type: str | None = None
@@ -123,8 +117,6 @@ class AlbumUpsert(BaseModel):
 
     @field_validator(
         "artist_description",
-        "artist_description_source_url",
-        "artist_description_source_label",
         "album_external_url",
         "album_stream_url",
         "album_type",
@@ -175,8 +167,6 @@ class AlbumCardRecord(BaseModel):
 
 class AlbumDetailRecord(AlbumCardRecord):
     artist_description: str | None = None
-    artist_description_source_url: str | None = None
-    artist_description_source_label: str | None = None
     artist_origin: str | None = None
     overview: str | None = None
     tracks: list[TrackRecord] = Field(default_factory=list)
@@ -308,8 +298,6 @@ class ImportTrackDraft(BaseModel):
 class ArtistDraftData(BaseModel):
     artist_name: str
     description: str | None = None
-    description_source_url: str | None = None
-    description_source_label: str | None = None
     external_url: str | None = None
     origin: str | None = None
     genre: str | None = None
@@ -318,8 +306,6 @@ class ArtistDraftData(BaseModel):
 class AlbumDraftData(BaseModel):
     artist_name: str
     artist_description: str | None = None
-    artist_description_source_url: str | None = None
-    artist_description_source_label: str | None = None
     album_external_url: str | None = None
     album_stream_url: str | None = None
     album_type: str | None = None
@@ -352,9 +338,11 @@ class ImportDraftResponse(BaseModel):
 
 
 class AlbumWithArtistImportResponse(BaseModel):
-    album_draft: ImportDraftRecord
+    album_draft: ImportDraftRecord | None = None
     artist_draft: ImportDraftRecord | None = None
     artist_exists: bool = False
+    album_exists: bool = False
+    existing_album: AlbumDetailRecord | None = None
     artist_source_url: str | None = None
 
 
@@ -445,8 +433,6 @@ def display_to_seconds(value: str | None) -> int | None:
 class AlbumFormPayload(BaseModel):
     artist_name: str
     artist_description: str | None = None
-    artist_description_source_url: str | None = None
-    artist_description_source_label: str | None = None
     album_external_url: str | None = None
     album_stream_url: str | None = None
     title: str
@@ -489,8 +475,6 @@ class AlbumFormPayload(BaseModel):
         return AlbumUpsert(
             artist_name=self.artist_name,
             artist_description=self.artist_description,
-            artist_description_source_url=self.artist_description_source_url,
-            artist_description_source_label=self.artist_description_source_label,
             album_external_url=self.album_external_url,
             album_stream_url=self.album_stream_url,
             title=self.title,

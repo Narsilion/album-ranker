@@ -238,7 +238,7 @@ class Database:
     def update_settings(self, payload: SettingsUpdateRequest) -> None:
         if not payload.active_model.strip():
             raise ValueError("Choose a model before saving settings.")
-        allowed_themes = {"dark", "dark-brown"}
+        allowed_themes = {"dark", "dark-brown", "dark-green"}
         if payload.theme not in allowed_themes:
             raise ValueError("Invalid theme value.")
         self.set_app_setting("active_model", payload.active_model)
@@ -349,8 +349,6 @@ class Database:
             merged = ArtistUpsert(
                 name=payload.name,
                 description=payload.description or existing.description,
-                description_source_url=payload.description_source_url or existing.description_source_url,
-                description_source_label=payload.description_source_label or existing.description_source_label,
                 external_url=payload.external_url or existing.external_url,
                 origin=payload.origin or existing.origin,
             )
@@ -361,16 +359,13 @@ class Database:
             cursor = connection.execute(
                 """
                 INSERT INTO artists(
-                    name, slug, description, description_source_url, description_source_label,
-                    external_url, origin, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    name, slug, description, external_url, origin, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload.name,
                     slug,
                     payload.description,
-                    payload.description_source_url,
-                    payload.description_source_label,
                     payload.external_url,
                     payload.origin,
                     now,
@@ -387,16 +382,13 @@ class Database:
             connection.execute(
                 """
                 UPDATE artists
-                SET name = ?, slug = ?, description = ?, description_source_url = ?,
-                    description_source_label = ?, external_url = ?, origin = ?, updated_at = ?
+                SET name = ?, slug = ?, description = ?, external_url = ?, origin = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
                     payload.name,
                     slug,
                     payload.description,
-                    payload.description_source_url,
-                    payload.description_source_label,
                     payload.external_url,
                     payload.origin,
                     utc_now_iso(),
@@ -448,8 +440,6 @@ class Database:
             row = connection.execute(
                 """
                 SELECT albums.*, artists.name AS artist_name, artists.description AS artist_description,
-                       artists.description_source_url AS artist_description_source_url,
-                       artists.description_source_label AS artist_description_source_label,
                        artists.external_url AS artist_external_url,
                        artists.origin AS artist_origin
                 FROM albums
@@ -868,10 +858,10 @@ class Database:
         now = utc_now_iso()
         chosen_source_url = None
         if target_type == "artist":
-            chosen_source_url = str(draft_payload.get("description_source_url") or request.source_url or "")
+            chosen_source_url = str(draft_payload.get("external_url") or request.source_url or "")
         if target_type == "album":
             chosen_source_url = str(
-                draft_payload.get("artist_description_source_url") or request.source_url or ""
+                draft_payload.get("album_external_url") or request.source_url or ""
             )
         with self.connection() as connection:
             cursor = connection.execute(
@@ -949,16 +939,12 @@ class Database:
                     """
                     UPDATE artists
                     SET description = COALESCE(?, description),
-                        description_source_url = COALESCE(?, description_source_url),
-                        description_source_label = COALESCE(?, description_source_label),
                         origin = COALESCE(?, origin),
                         updated_at = ?
                     WHERE id = ?
                     """,
                     (
                         payload.artist_description,
-                        payload.artist_description_source_url,
-                        payload.artist_description_source_label,
                         getattr(payload, 'artist_origin', None),
                         utc_now_iso(),
                         artist_id,
@@ -970,16 +956,13 @@ class Database:
             cursor = connection.execute(
                 """
                 INSERT INTO artists(
-                    name, slug, description, description_source_url, description_source_label,
-                    external_url, origin, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    name, slug, description, external_url, origin, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload.artist_name,
                     slug,
                     payload.artist_description,
-                    payload.artist_description_source_url,
-                    payload.artist_description_source_label,
                     None,
                     None,
                     now,

@@ -100,6 +100,12 @@ def _validate_album_source_url(source_url: str | None) -> None:
         )
 
 
+def _is_youtube_music_album_url(url: str | None) -> bool:
+    if not url:
+        return False
+    return "music.youtube.com" in url
+
+
 def _validation_message(field: str, message: str) -> str:
     normalized = message.replace("Value error, ", "")
     field_labels = {
@@ -184,7 +190,22 @@ def create_app(
     importer: MetadataImporter | None = None,
     cover_downloader: CoverDownloader | None = None,
 ) -> FastAPI:
-    available_models = ["gpt-5-mini", "gpt-5.4-mini", "gpt-5", "gpt-5.4"]
+    available_models = [
+        "gpt-4.1-nano",
+        "gpt-4.1-mini",
+        "gpt-4.1",
+        "gpt-4o-mini",
+        "gpt-4o",
+        "o1-mini",
+        "o1",
+        "o3-mini",
+        "o3",
+        "o4-mini",
+        "gpt-5-mini",
+        "gpt-5.4-mini",
+        "gpt-5",
+        "gpt-5.4",
+    ]
     if settings.model not in available_models:
         available_models.insert(0, settings.model)
     db = Database(settings.db_path)
@@ -385,8 +406,6 @@ def create_app(
         upsert = ArtistUpsert(
             name=draft_data.artist_name or existing.name,
             description=draft_data.description or existing.description,
-            description_source_url=draft_data.description_source_url or existing.description_source_url,
-            description_source_label=draft_data.description_source_label or existing.description_source_label,
             external_url=draft_data.external_url or existing.external_url,
             origin=draft_data.origin or existing.origin,
         )
@@ -491,8 +510,6 @@ def create_app(
         upsert = AlbumUpsert(
             artist_name=existing.artist_name,
             artist_description=draft_data.artist_description or existing.artist_description,
-            artist_description_source_url=draft_data.artist_description_source_url or existing.artist_description_source_url,
-            artist_description_source_label=draft_data.artist_description_source_label or existing.artist_description_source_label,
             album_external_url=draft_data.album_external_url or existing.album_external_url,
             album_stream_url=existing.album_stream_url,
             album_type=draft_data.album_type or existing.album_type,
@@ -684,11 +701,20 @@ def create_app(
             album_title=album_data.album_title or payload.album_title,
             source_url=payload.source_url,
         )
-        album_draft = db.create_import_job("album", album_request, draft_to_json(album_data))
+        existing_album = None
+        if album_data.album_external_url:
+            existing_album = db.get_album_by_external_url(album_data.album_external_url)
+        if existing_album is None and album_data.artist_name and album_data.album_title:
+            existing_album = db.get_album_by_artist_and_title(album_data.artist_name, album_data.album_title)
+        album_draft = None
+        if existing_album is None:
+            album_draft = db.create_import_job("album", album_request, draft_to_json(album_data))
         artist_source_url = metal_archives_artist_url_from_album_url(payload.source_url)
+        if not artist_source_url and _is_youtube_music_album_url(payload.source_url) and album_data.artist_name:
+            artist_source_url = payload.source_url
         artist_exists = bool(album_data.artist_name and db.get_artist_by_name(album_data.artist_name))
         artist_draft = None
-        if not artist_exists and artist_source_url:
+        if existing_album is None and not artist_exists and artist_source_url:
             artist_request = ImportRequest(artist_name=album_data.artist_name, source_url=artist_source_url)
             try:
                 artist_data = importer.create_artist_draft(artist_request, model=db.get_active_model(settings.model))
@@ -719,6 +745,8 @@ def create_app(
             album_draft=album_draft,
             artist_draft=artist_draft,
             artist_exists=artist_exists,
+            album_exists=existing_album is not None,
+            existing_album=existing_album,
             artist_source_url=artist_source_url,
         )
 

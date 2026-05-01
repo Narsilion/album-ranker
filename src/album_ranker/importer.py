@@ -273,8 +273,6 @@ def _metal_archives_album_draft(request: ImportRequest, html: str, metadata: dic
     return AlbumDraftData(
         artist_name=artist_name,
         artist_description=None,
-        artist_description_source_url=request.source_url,
-        artist_description_source_label=metadata.get("source_label"),
         album_external_url=request.source_url,
         album_title=title,
         release_year=release_year,
@@ -310,8 +308,6 @@ def _metal_archives_artist_draft(request: ImportRequest, html: str, metadata: di
     return ArtistDraftData(
         artist_name=artist_name or _host_label(request.source_url) or "Unknown Artist",
         description=description,
-        description_source_url=request.source_url,
-        description_source_label=metadata.get("source_label") or _host_label(request.source_url),
         external_url=request.source_url,
         origin=origin,
         genre=genre,
@@ -392,8 +388,6 @@ def _bandcamp_album_draft(request: ImportRequest, html: str, metadata: dict[str,
     return AlbumDraftData(
         artist_name=artist_name or request.artist_name,
         artist_description=metadata.get("description"),
-        artist_description_source_url=request.source_url,
-        artist_description_source_label=metadata.get("source_label"),
         album_external_url=request.source_url,
         album_title=album_title,
         release_year=release_year,
@@ -492,8 +486,6 @@ def _wikipedia_album_draft(request: ImportRequest, html: str, metadata: dict[str
     return AlbumDraftData(
         artist_name=artist_name,
         artist_description=metadata.get("description"),
-        artist_description_source_url=request.source_url,
-        artist_description_source_label=metadata.get("source_label"),
         album_external_url=request.source_url,
         album_title=album_title,
         release_year=release_year,
@@ -779,8 +771,6 @@ def _youtube_music_album_draft(request: ImportRequest, html: str, metadata: dict
     return AlbumDraftData(
         artist_name=artist_name or request.artist_name,
         artist_description=None,
-        artist_description_source_url=request.source_url,
-        artist_description_source_label=metadata.get("source_label"),
         album_external_url=request.source_url,
         album_stream_url=request.source_url,
         album_title=album_title,
@@ -791,12 +781,58 @@ def _youtube_music_album_draft(request: ImportRequest, html: str, metadata: dict
     )
 
 
+def _extract_location_from_born(born_text: str) -> str | None:
+    """Extract location from a Wikipedia 'Born' field.
+
+    Solo-artist pages put name + dates + age in parentheses + location in one cell.
+    Example: 'Benjamin George Cramer ( 1991-04-16 ) April 16, 1991 (age 35) Atlanta , Georgia, United States'
+    We split on the last '(age N)' marker and return everything after it, stripped.
+    """
+    m = re.search(r'\(age\s+\d+\)\s*(.*)', born_text)
+    if m:
+        location = m.group(1).strip()
+        return location or None
+    return None
+
+
 def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
     metadata = _page_metadata(request.source_url)
     html = str(metadata.get("html") or "")
     source_label = str(metadata.get("source_label") or _host_label(request.source_url) or "")
     if "metal-archives.com" in source_label and html:
         return _metal_archives_artist_draft(request, html, metadata)
+    if "wikipedia.org" in source_label and html:
+        infobox = _extract_wikipedia_infobox(html)
+        artist_name = request.artist_name.strip()
+        if not artist_name:
+            title = str(metadata.get("title") or "").strip()
+            artist_name = title.split(" - ")[0].strip() if title else ""
+        if not artist_name:
+            artist_name = _host_label(request.source_url) or "Unknown Artist"
+        origin = infobox.get("Origin") or infobox.get("Birthplace")
+        if not origin:
+            born = infobox.get("Born")
+            if born:
+                origin = _extract_location_from_born(born)
+        genre_raw = infobox.get("Genre") or infobox.get("Genres")
+        genre = re.split(r'[\n,/]', genre_raw)[0].strip() if genre_raw else None
+        description = metadata.get("description")
+        if not description:
+            body_m = re.search(r'<div[^>]+id=["\']mw-content-text["\'][^>]*>(.*?)</div>', html, re.DOTALL | re.IGNORECASE)
+            if body_m:
+                paras = re.findall(r'<p[^>]*>(.*?)</p>', body_m.group(1), re.DOTALL | re.IGNORECASE)
+                for para in paras:
+                    text = _html_unescape(_strip_html(para)).strip()
+                    if len(text) > 40:
+                        description = text
+                        break
+        return ArtistDraftData(
+            artist_name=artist_name,
+            description=description,
+            external_url=request.source_url,
+            origin=origin,
+            genre=genre,
+        )
     artist_name = request.artist_name.strip()
     if not artist_name:
         title = str(metadata.get("title") or "").strip()
@@ -807,8 +843,6 @@ def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
     return ArtistDraftData(
         artist_name=artist_name,
         description=metadata.get("description"),
-        description_source_url=request.source_url,
-        description_source_label=metadata.get("source_label"),
         external_url=request.source_url,
         origin=None,
         genre=None,
@@ -898,8 +932,6 @@ def _best_effort_album_draft(request: ImportRequest, metadata: dict[str, Any] | 
         draft = AlbumDraftData(
             artist_name=request.artist_name,
             artist_description=metadata.get("description"),
-            artist_description_source_url=request.source_url,
-            artist_description_source_label=metadata.get("source_label"),
             album_external_url=request.source_url,
             album_stream_url=stream_url,
             album_title=album_title,
@@ -983,16 +1015,6 @@ def _merge_album_drafts(ai_data: dict[str, Any], fallback: AlbumDraftData, reque
     merged["artist_name"] = merged.get("artist_name") or fallback.artist_name or request.artist_name
     merged["album_title"] = _fix_allcaps(merged.get("album_title") or fallback.album_title or request.album_title or "")
     merged["artist_description"] = merged.get("artist_description") or fallback.artist_description
-    merged["artist_description_source_url"] = (
-        merged.get("artist_description_source_url")
-        or fallback.artist_description_source_url
-        or request.source_url
-    )
-    merged["artist_description_source_label"] = (
-        merged.get("artist_description_source_label")
-        or fallback.artist_description_source_label
-        or _host_label(request.source_url)
-    )
     merged["album_external_url"] = merged.get("album_external_url") or fallback.album_external_url or request.source_url
     merged["album_stream_url"] = fallback.album_stream_url or merged.get("album_stream_url")
     merged["release_year"] = merged.get("release_year") or fallback.release_year
@@ -1060,8 +1082,6 @@ class MetadataImporter:
             "properties": {
                 "artist_name": {"type": "string"},
                 "description": {"type": ["string", "null"]},
-                "description_source_url": {"type": ["string", "null"]},
-                "description_source_label": {"type": ["string", "null"]},
                 "external_url": {"type": ["string", "null"]},
                 "origin": {"type": ["string", "null"]},
                 "genre": {"type": ["string", "null"]},
@@ -1069,8 +1089,6 @@ class MetadataImporter:
             "required": [
                 "artist_name",
                 "description",
-                "description_source_url",
-                "description_source_label",
                 "external_url",
                 "origin",
                 "genre",
@@ -1115,8 +1133,7 @@ class MetadataImporter:
             data["artist_name"] = _best_effort_artist_draft(request).artist_name
         fallback = _best_effort_artist_draft(request)
         data["genre"] = data.get("genre") or fallback.genre
-        data.setdefault("description_source_url", request.source_url)
-        data.setdefault("description_source_label", _host_label(request.source_url))
+        data.setdefault("external_url", request.source_url)
         draft = ArtistDraftData.model_validate(data)
         self._set_diagnostics(
             {
@@ -1161,8 +1178,6 @@ class MetadataImporter:
             "properties": {
                 "artist_name": {"type": "string"},
                 "artist_description": {"type": ["string", "null"]},
-                "artist_description_source_url": {"type": ["string", "null"]},
-                "artist_description_source_label": {"type": ["string", "null"]},
                 "album_external_url": {"type": ["string", "null"]},
                 "album_title": {"type": "string"},
                 "release_year": {"type": ["integer", "null"]},
@@ -1188,8 +1203,6 @@ class MetadataImporter:
             "required": [
                 "artist_name",
                 "artist_description",
-                "artist_description_source_url",
-                "artist_description_source_label",
                 "album_external_url",
                 "album_title",
                 "release_year",

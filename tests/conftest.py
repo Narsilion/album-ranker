@@ -23,8 +23,6 @@ class FakeImporter(MetadataImporter):
         return ArtistDraftData(
             artist_name=request.artist_name or "For My Pain...",
             description="Genre: Gothic Metal\nA precise artist description",
-            description_source_url=request.source_url or "https://example.com/artist",
-            description_source_label="example.com",
             external_url=request.source_url or "https://example.com/artist",
             origin="Finland, Oulu",
             genre="Gothic Metal",
@@ -34,8 +32,6 @@ class FakeImporter(MetadataImporter):
         return AlbumDraftData(
             artist_name=request.artist_name or "For My Pain...",
             artist_description="A precise description",
-            artist_description_source_url=request.source_url or "https://example.com/source",
-            artist_description_source_label="example.com",
             album_external_url="https://example.com/album",
             album_title=request.album_title or "Untitled",
             release_year=2026,
