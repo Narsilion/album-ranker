@@ -1241,7 +1241,7 @@ def render_artists_page(
               </div>
             </div>
             <div class="row">
-              <button type="submit" id="artistImportSubmitBtn">Populate With AI</button>
+              <button type="submit" id="artistImportSubmitBtn">Fetch Metadata</button>
               <button type="button" id="artistImportCancelBtn" class="secondary hidden">Cancel</button>
               <span class="status" id="artistImportStatus"></span>
             </div>
@@ -1673,7 +1673,7 @@ def render_artist_detail_page(
             </div>
           </div>
           <div class="row">
-            <button type="submit" id="artistAlbumImportSubmitBtn">Populate With AI</button>
+            <button type="submit" id="artistAlbumImportSubmitBtn">Fetch Metadata</button>
             <button type="button" id="artistAlbumImportCancelBtn" class="secondary hidden">Cancel</button>
             <span class="status" id="artistAlbumImportStatus"></span>
           </div>
