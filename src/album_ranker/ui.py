@@ -387,10 +387,10 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
       .cover:hover .cover-upload-overlay {{
         opacity: 1;
       }}
-      .cover-bookmark-btn {{
+      .cover-bookmark-btn,
+      .cover-listened-btn {{
         position: absolute;
         top: 8px;
-        right: 8px;
         width: 32px;
         height: 32px;
         border-radius: 50%;
@@ -406,14 +406,26 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         padding: 0;
         color: rgba(255,255,255,0.9);
       }}
+      .cover-bookmark-btn {{
+        right: 8px;
+      }}
+      .cover-listened-btn {{
+        left: 8px;
+      }}
       .cover:hover .cover-bookmark-btn,
+      .cover:hover .cover-listened-btn,
       .cover-bookmark-btn[data-bookmarked="true"] {{
         opacity: 1;
       }}
       .cover-bookmark-btn[data-bookmarked="true"] {{
         color: var(--accent);
       }}
-      .cover-bookmark-btn:hover {{
+      .cover-listened-btn[data-listened="true"] {{
+        opacity: 1;
+        color: #89d88f;
+      }}
+      .cover-bookmark-btn:hover,
+      .cover-listened-btn:hover {{
         background: rgba(0,0,0,0.8);
       }}
       .album-title {{
@@ -1017,7 +1029,15 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         }});
         document.querySelectorAll(`.album-listened-toggle[data-album-id="${{albumId}}"]`).forEach((button) => {{
           button.dataset.listened = listened ? "true" : "false";
-          button.textContent = listened ? "Mark Unlistened" : "Mark Listened";
+          if (button.classList.contains('cover-listened-btn')) {{
+            button.innerHTML = listened
+              ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm4.6 7.7-5.3 5.3a1 1 0 0 1-1.4 0l-2.5-2.5 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4z"/></svg>'
+              : '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/></svg>';
+            button.title = listened ? 'Mark Unlistened' : 'Mark Listened';
+            button.setAttribute('aria-label', listened ? 'Mark Unlistened' : 'Mark Listened');
+          }} else {{
+            button.textContent = listened ? "Mark Unlistened" : "Mark Listened";
+          }}
         }});
         document.querySelectorAll(`.album-listened-state[data-album-id="${{albumId}}"]`).forEach((node) => {{
           node.textContent = listened ? "Listened" : "Not Listened";
@@ -1103,6 +1123,7 @@ def _album_card_markup(
     interactive_rating: bool = False,
     include_bookmark_action: bool = True,
     include_listened_action: bool = False,
+    include_listened_cover_action: bool = True,
     extra_class: str = "",
     extra_attrs: str = "",
 ) -> str:
@@ -1126,6 +1147,7 @@ def _album_card_markup(
     else:
         rating_widget = _rating_markup(album.rating)
     cover_bookmark_btn = _album_cover_bookmark_btn(album) if include_bookmark_action else ""
+    cover_listened_btn = _album_cover_listened_btn(album) if include_listened_cover_action else ""
     listened_button = (
         _album_listened_button(album)
         if include_listened_action
@@ -1134,7 +1156,7 @@ def _album_card_markup(
     actions = f'<div class="album-card-actions">{listened_button}</div>' if listened_button else ""
     return f"""
       <a class="album-card{(' ' + extra_class) if extra_class else ''}" href="/albums/{album.id}" data-genre="{_escape(album.genre)}" data-year="{_escape(str(album.release_year or ''))}" data-artist="{_escape(album.artist_name)}" data-title="{_escape(album.title)}"{(' ' + extra_attrs) if extra_attrs else ''}>
-        <div class="cover"><img src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover">{cover_bookmark_btn}</div>
+        <div class="cover"><img src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover">{cover_listened_btn}{cover_bookmark_btn}</div>
         <div class="album-title">{_escape(album.title)}</div>
         {f'<div class="album-type muted">{_escape(album.album_type)}</div>' if album.album_type else ''}
         <div class="album-subtitle">{_escape(artist_line)}</div>
@@ -1162,6 +1184,14 @@ _BOOKMARK_SVG_EMPTY = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">'
     '<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>'
 )
+_LISTENED_SVG_FILLED = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">'
+    '<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm4.6 7.7-5.3 5.3a1 1 0 0 1-1.4 0l-2.5-2.5 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4z"/></svg>'
+)
+_LISTENED_SVG_EMPTY = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">'
+    '<circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/></svg>'
+)
 
 
 def _album_cover_bookmark_btn(album: AlbumCardRecord) -> str:
@@ -1171,6 +1201,18 @@ def _album_cover_bookmark_btn(album: AlbumCardRecord) -> str:
     return (
         f'<button type="button" class="album-bookmark-toggle cover-bookmark-btn" '
         f'data-album-id="{album.id}" data-bookmarked="{str(bookmarked).lower()}" '
+        f'title="{label}" aria-label="{label}" '
+        f'onclick="event.preventDefault(); event.stopPropagation();">{icon}</button>'
+    )
+
+
+def _album_cover_listened_btn(album: AlbumCardRecord) -> str:
+    listened = bool(album.listened_at)
+    label = "Mark Unlistened" if listened else "Mark Listened"
+    icon = _LISTENED_SVG_FILLED if listened else _LISTENED_SVG_EMPTY
+    return (
+        f'<button type="button" class="album-listened-toggle cover-listened-btn" '
+        f'data-album-id="{album.id}" data-listened="{str(listened).lower()}" '
         f'title="{label}" aria-label="{label}" '
         f'onclick="event.preventDefault(); event.stopPropagation();">{icon}</button>'
     )

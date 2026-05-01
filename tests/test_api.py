@@ -283,6 +283,8 @@ def test_manual_album_create_and_render_pages(client) -> None:
     assert "Album Import" not in albums_page.text
     assert "Album Import" not in artists_page.text
     assert 'class="album-bookmark-toggle cover-bookmark-btn"' in albums_page.text
+    assert 'class="album-listened-toggle cover-listened-btn"' in albums_page.text
+    assert 'class="album-listened-toggle cover-listened-btn"' in artist_detail_page.text
     assert f'href="/albums/{album_id}"' in artist_detail_page.text
     assert "artistAlbumImportForm.addEventListener" not in artists_page.text
 
@@ -643,6 +645,11 @@ def test_bookmarks_page_and_listened_workflow(client) -> None:
     assert rebookmarked_listened.json()["listened_at"] is not None
     assert rebookmarked_listened.json()["bookmarked_at"] is not None
     assert "Wyrd" in client.get("/bookmarks").text
+
+    unbookmarked_listened = client.patch(f"/api/albums/{album_id}/bookmark", json={"bookmarked": False})
+    assert unbookmarked_listened.status_code == 200
+    assert unbookmarked_listened.json()["bookmarked_at"] is None
+    assert unbookmarked_listened.json()["listened_at"] == rebookmarked_listened.json()["listened_at"]
 
 
 def test_bookmark_and_listened_missing_album_returns_404(client) -> None:
