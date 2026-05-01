@@ -607,3 +607,83 @@ def test_ytm_album_draft_uses_ytm_page_tracks_not_playlist_page(monkeypatch) -> 
     assert draft.tracks[7].duration_seconds == 728
     # Total duration should be sum of all tracks
     assert draft.duration_seconds == sum(t.duration_seconds for t in draft.tracks if t.duration_seconds)
+
+
+def test_alterportal_album_draft_parses_page(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="EarlyRise - The Flood Is Coming (2026)">
+        <meta property="og:image" content="https://i127.fastpic.org/big/2026/0430/cover.jpg">
+      </head>
+      <body>
+        <!--dle_image_begin:...|-->
+        <img src="https://i127.fastpic.org/big/2026/0430/cover.jpg" style="max-width:100%;" alt="EarlyRise - The Flood Is Coming (2026)">
+        <!--dle_image_end-->
+        <br><!--colorstart:#33FFFF--><span style="color:#33FFFF"><!--/colorstart--><b>Стиль:</b><!--colorend--></span><!--/colorend--> Alternative Rock / Alternative Metal / Female Vocals<br>
+        <b>Страна:</b> Israel<br>
+        <b>Формат:</b> mp3, 320 kbps<br>
+        <b>Время звучания:</b> 26 min 49 sec<br><br>
+        <b>Треклист:</b><br>
+        01. Dance For The Money<br>
+        02. All Hail The Mighty Circus<br>
+        03. The Bitter Pill<br>
+        04. The Flood Is Coming<br>
+        05. Paper Empire<br>
+        06. Dreaming In Sepia<br>
+        07. Rinse And Repeat<br>
+        08. Distorted Kingdom<br>
+        <br><br>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_album_draft(
+        ImportRequest(
+            artist_name="",
+            source_url="https://alterportal.net/2026_albums/189049-earlyrise-the-flood-is-coming-2026.html",
+        )
+    )
+
+    assert draft.artist_name == "EarlyRise"
+    assert draft.album_title == "The Flood Is Coming"
+    assert draft.release_year == 2026
+    assert draft.genre == "Alternative Rock"
+    assert draft.duration_seconds == 26 * 60 + 49
+    assert draft.cover_source_url == "https://i127.fastpic.org/big/2026/0430/cover.jpg"
+    assert draft.notes == "Format: mp3, 320 kbps"
+    assert len(draft.tracks) == 8
+    assert draft.tracks[0].title == "Dance For The Money"
+    assert draft.tracks[7].title == "Distorted Kingdom"
+    assert draft.album_type == "Full-length"
+
+
+def test_alterportal_artist_draft_parses_page(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="EarlyRise - The Flood Is Coming (2026)">
+      </head>
+      <body>
+        <b>Стиль:</b> Alternative Rock / Alternative Metal / Female Vocals<br>
+        <b>Страна:</b> Israel<br>
+        <b>Формат:</b> mp3, 320 kbps<br>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(
+            artist_name="EarlyRise",
+            source_url="https://alterportal.net/2026_albums/189049-earlyrise-the-flood-is-coming-2026.html",
+        )
+    )
+
+    assert draft.artist_name == "EarlyRise"
+    assert draft.origin == "Israel"
+    assert draft.genre == "Alternative Rock"
+    assert draft.description is None
+    assert draft.external_url == "https://alterportal.net/2026_albums/189049-earlyrise-the-flood-is-coming-2026.html"
+

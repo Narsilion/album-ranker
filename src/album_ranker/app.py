@@ -106,6 +106,12 @@ def _is_youtube_music_album_url(url: str | None) -> bool:
     return "music.youtube.com" in url
 
 
+def _is_alterportal_album_url(url: str | None) -> bool:
+    if not url:
+        return False
+    return "alterportal.net" in url
+
+
 def _validation_message(field: str, message: str) -> str:
     normalized = message.replace("Value error, ", "")
     field_labels = {
@@ -711,6 +717,8 @@ def create_app(
             album_draft = db.create_import_job("album", album_request, draft_to_json(album_data))
         artist_source_url = metal_archives_artist_url_from_album_url(payload.source_url)
         if not artist_source_url and _is_youtube_music_album_url(payload.source_url) and album_data.artist_name:
+            artist_source_url = payload.source_url
+        if not artist_source_url and _is_alterportal_album_url(payload.source_url) and album_data.artist_name:
             artist_source_url = payload.source_url
         artist_exists = bool(album_data.artist_name and db.get_artist_by_name(album_data.artist_name))
         artist_draft = None

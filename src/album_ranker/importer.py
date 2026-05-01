@@ -840,6 +840,23 @@ def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
             artist_name = title.split(" - ")[0].strip()
     if not artist_name:
         artist_name = _host_label(request.source_url) or "Unknown Artist"
+    if "alterportal.net" in source_label and html:
+        clean = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
+        if not artist_name:
+            og_title = str(metadata.get("title") or "").strip()
+            title_no_year = re.sub(r"\s*\(\d{4}\)\s*$", "", og_title).strip()
+            if " - " in title_no_year:
+                artist_name = title_no_year.split(" - ", 1)[0].strip()
+        genre_raw = _alterportal_field(clean, "Стиль")
+        genre = re.split(r"\s*/\s*", genre_raw)[0].strip() if genre_raw else None
+        origin = _alterportal_field(clean, "Страна")
+        return ArtistDraftData(
+            artist_name=artist_name or _host_label(request.source_url) or "Unknown Artist",
+            description=None,
+            external_url=request.source_url,
+            origin=origin,
+            genre=genre,
+        )
     return ArtistDraftData(
         artist_name=artist_name,
         description=metadata.get("description"),
@@ -910,6 +927,72 @@ def _is_streaming_url(url: str | None) -> bool:
     return any(h in host for h in _STREAMING_HOSTS)
 
 
+def _alterportal_field(clean_html: str, label: str) -> str | None:
+    """Extract a labeled field value from an alterportal page body (HTML comments pre-stripped)."""
+    m = re.search(rf"<b>{re.escape(label)}:</b>(.*?)<br", clean_html, re.IGNORECASE | re.DOTALL)
+    return _strip_html(m.group(1)).strip() or None if m else None
+
+
+def _alterportal_album_draft(request: ImportRequest, html: str, metadata: dict[str, Any]) -> AlbumDraftData:
+    """Build an AlbumDraftData from an alterportal.net album page."""
+    og_title = str(metadata.get("title") or "").strip()
+    artist_name = request.artist_name or ""
+    album_title = request.album_title or ""
+    release_year: int | None = None
+
+    if og_title:
+        year_m = re.search(r"\((\d{4})\)\s*$", og_title)
+        if year_m:
+            release_year = int(year_m.group(1))
+            title_part = og_title[: year_m.start()].strip()
+        else:
+            title_part = og_title
+        if " - " in title_part:
+            parts = title_part.split(" - ", 1)
+            if not artist_name:
+                artist_name = parts[0].strip()
+            if not album_title:
+                album_title = parts[1].strip()
+        elif not album_title:
+            album_title = title_part
+
+    clean = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
+
+    genre_raw = _alterportal_field(clean, "Стиль")
+    genre = re.split(r"\s*/\s*", genre_raw)[0].strip() if genre_raw else None
+
+    duration_raw = _alterportal_field(clean, "Время звучания")
+    duration_seconds: int | None = None
+    if duration_raw:
+        dur_m = re.search(r"(\d+)\s*min(?:\s*(\d+)\s*sec)?", duration_raw)
+        if dur_m:
+            duration_seconds = int(dur_m.group(1)) * 60 + int(dur_m.group(2) or 0)
+
+    tracks: list[dict[str, Any]] = []
+    tl_m = re.search(r"<b>Треклист:</b>(.*?)(?:<br>\s*<br>|<iframe|$)", clean, re.DOTALL | re.IGNORECASE)
+    if tl_m:
+        for track_m in re.finditer(r"(\d+)\.\s+([^<\n\r]+)", tl_m.group(1)):
+            title = _html_unescape(track_m.group(2).strip())
+            if title:
+                tracks.append({"track_number": int(track_m.group(1)), "title": title, "duration_seconds": None})
+
+    format_raw = _alterportal_field(clean, "Формат")
+    notes = f"Format: {format_raw}" if format_raw else None
+
+    return AlbumDraftData(
+        artist_name=artist_name or request.artist_name,
+        artist_description=None,
+        album_external_url=request.source_url,
+        album_title=album_title,
+        release_year=release_year,
+        genre=genre,
+        duration_seconds=duration_seconds,
+        cover_source_url=metadata.get("image"),
+        notes=notes,
+        tracks=tracks,
+    )
+
+
 def _best_effort_album_draft(request: ImportRequest, metadata: dict[str, Any] | None = None) -> AlbumDraftData:
     if metadata is None:
         metadata = _page_metadata(request.source_url)
@@ -923,6 +1006,8 @@ def _best_effort_album_draft(request: ImportRequest, metadata: dict[str, Any] | 
         draft = _bandcamp_album_draft(request, html, metadata)
     elif "wikipedia.org" in source_label and html:
         draft = _wikipedia_album_draft(request, html, metadata)
+    elif "alterportal.net" in source_label and html:
+        draft = _alterportal_album_draft(request, html, metadata)
     else:
         page_title = str(metadata.get("title") or "")
         album_title = request.album_title or ""
