@@ -404,9 +404,6 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         transition: opacity 0.18s, background 0.18s, color 0.18s;
         z-index: 2;
         padding: 0;
-        font-size: 17px;
-        line-height: 1;
-        font-weight: 700;
         color: rgba(255,255,255,0.9);
       }}
       .cover:hover .cover-bookmark-btn,
@@ -1009,7 +1006,9 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         document.querySelectorAll(`.album-bookmark-toggle[data-album-id="${{albumId}}"]`).forEach((button) => {{
           button.dataset.bookmarked = bookmarked ? "true" : "false";
           if (button.classList.contains('cover-bookmark-btn')) {{
-            button.textContent = bookmarked ? '\u2713' : '+';
+            button.innerHTML = bookmarked
+              ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="17" fill="currentColor" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>'
+              : '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>';
             button.title = bookmarked ? 'Remove from Later' : 'Save for Later';
             button.setAttribute('aria-label', bookmarked ? 'Remove from Later' : 'Save for Later');
           }} else {{
@@ -1155,10 +1154,20 @@ def _album_bookmark_button(album: AlbumCardRecord) -> str:
     )
 
 
+_BOOKMARK_SVG_FILLED = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="17" fill="currentColor" aria-hidden="true">'
+    '<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>'
+)
+_BOOKMARK_SVG_EMPTY = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">'
+    '<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>'
+)
+
+
 def _album_cover_bookmark_btn(album: AlbumCardRecord) -> str:
     bookmarked = bool(album.bookmarked_at)
     label = "Remove from Later" if bookmarked else "Save for Later"
-    icon = "\u2713" if bookmarked else "+"
+    icon = _BOOKMARK_SVG_FILLED if bookmarked else _BOOKMARK_SVG_EMPTY
     return (
         f'<button type="button" class="album-bookmark-toggle cover-bookmark-btn" '
         f'data-album-id="{album.id}" data-bookmarked="{str(bookmarked).lower()}" '
