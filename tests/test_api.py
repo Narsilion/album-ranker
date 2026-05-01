@@ -282,7 +282,7 @@ def test_manual_album_create_and_render_pages(client) -> None:
     assert "Use a Metal Archives album page URL from /albums/" in artist_detail_page.text
     assert "Album Import" not in albums_page.text
     assert "Album Import" not in artists_page.text
-    assert 'class="secondary album-bookmark-toggle"' in albums_page.text
+    assert 'class="album-bookmark-toggle cover-bookmark-btn"' in albums_page.text
     assert f'href="/albums/{album_id}"' in artist_detail_page.text
     assert "artistAlbumImportForm.addEventListener" not in artists_page.text
 
@@ -610,7 +610,7 @@ def test_bookmarks_page_and_listened_workflow(client) -> None:
     assert bookmarked.json()["listened_at"] is None
     assert bookmarks_page.status_code == 200
     assert "Wyrd" in bookmarks_page.text
-    assert 'class="secondary album-bookmark-toggle"' in bookmarks_page.text
+    assert 'class="album-bookmark-toggle cover-bookmark-btn"' in bookmarks_page.text
     assert "Remove from Later" in bookmarks_page.text
     assert "move-up" not in bookmarks_page.text
     assert "Album Import" not in bookmarks_page.text

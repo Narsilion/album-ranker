@@ -387,6 +387,38 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
       .cover:hover .cover-upload-overlay {{
         opacity: 1;
       }}
+      .cover-bookmark-btn {{
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: rgba(0,0,0,0.55);
+        border: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        transition: opacity 0.18s, background 0.18s, color 0.18s;
+        z-index: 2;
+        padding: 0;
+        font-size: 17px;
+        line-height: 1;
+        font-weight: 700;
+        color: rgba(255,255,255,0.9);
+      }}
+      .cover:hover .cover-bookmark-btn,
+      .cover-bookmark-btn[data-bookmarked="true"] {{
+        opacity: 1;
+      }}
+      .cover-bookmark-btn[data-bookmarked="true"] {{
+        color: var(--accent);
+      }}
+      .cover-bookmark-btn:hover {{
+        background: rgba(0,0,0,0.8);
+      }}
       .album-title {{
         margin-top: 12px;
         font-weight: 600;
@@ -976,7 +1008,13 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         const listened = Boolean(payload.listened_at);
         document.querySelectorAll(`.album-bookmark-toggle[data-album-id="${{albumId}}"]`).forEach((button) => {{
           button.dataset.bookmarked = bookmarked ? "true" : "false";
-          button.textContent = bookmarked ? "Remove from Later" : "Save for Later";
+          if (button.classList.contains('cover-bookmark-btn')) {{
+            button.textContent = bookmarked ? '\u2713' : '+';
+            button.title = bookmarked ? 'Remove from Later' : 'Save for Later';
+            button.setAttribute('aria-label', bookmarked ? 'Remove from Later' : 'Save for Later');
+          }} else {{
+            button.textContent = bookmarked ? "Remove from Later" : "Save for Later";
+          }}
         }});
         document.querySelectorAll(`.album-listened-toggle[data-album-id="${{albumId}}"]`).forEach((button) => {{
           button.dataset.listened = listened ? "true" : "false";
@@ -1088,16 +1126,16 @@ def _album_card_markup(
         )
     else:
         rating_widget = _rating_markup(album.rating)
-    bookmark_button = _album_bookmark_button(album) if include_bookmark_action else ""
+    cover_bookmark_btn = _album_cover_bookmark_btn(album) if include_bookmark_action else ""
     listened_button = (
         _album_listened_button(album)
         if include_listened_action
         else ""
     )
-    actions = f'<div class="album-card-actions">{bookmark_button}{listened_button}</div>' if bookmark_button or listened_button else ""
+    actions = f'<div class="album-card-actions">{listened_button}</div>' if listened_button else ""
     return f"""
       <a class="album-card{(' ' + extra_class) if extra_class else ''}" href="/albums/{album.id}" data-genre="{_escape(album.genre)}" data-year="{_escape(str(album.release_year or ''))}" data-artist="{_escape(album.artist_name)}" data-title="{_escape(album.title)}"{(' ' + extra_attrs) if extra_attrs else ''}>
-        <div class="cover"><img src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover"></div>
+        <div class="cover"><img src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover">{cover_bookmark_btn}</div>
         <div class="album-title">{_escape(album.title)}</div>
         {f'<div class="album-type muted">{_escape(album.album_type)}</div>' if album.album_type else ''}
         <div class="album-subtitle">{_escape(artist_line)}</div>
@@ -1114,6 +1152,18 @@ def _album_bookmark_button(album: AlbumCardRecord) -> str:
         f'<button type="button" class="secondary album-bookmark-toggle" data-album-id="{album.id}" '
         f'data-bookmarked="{str(bookmarked).lower()}">'
         f'{"Remove from Later" if bookmarked else "Save for Later"}</button>'
+    )
+
+
+def _album_cover_bookmark_btn(album: AlbumCardRecord) -> str:
+    bookmarked = bool(album.bookmarked_at)
+    label = "Remove from Later" if bookmarked else "Save for Later"
+    icon = "\u2713" if bookmarked else "+"
+    return (
+        f'<button type="button" class="album-bookmark-toggle cover-bookmark-btn" '
+        f'data-album-id="{album.id}" data-bookmarked="{str(bookmarked).lower()}" '
+        f'title="{label}" aria-label="{label}" '
+        f'onclick="event.preventDefault(); event.stopPropagation();">{icon}</button>'
     )
 
 
