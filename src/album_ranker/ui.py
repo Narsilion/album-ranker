@@ -325,6 +325,10 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         color: #091019;
         font-weight: 700;
         cursor: pointer;
+        width: auto;
+      }}
+      .row > button {{
+        flex: 0 0 auto;
       }}
       button.secondary {{
         background: rgba(255, 255, 255, 0.08);
@@ -625,6 +629,7 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         display: grid;
         gap: 10px;
         margin-top: 14px;
+        justify-items: start;
       }}
       .detail-head {{
         display: flex;
@@ -1350,13 +1355,15 @@ def render_artists_page(
           <div id="artistImportReview" class="draft hidden" style="margin-top:14px;">
             <form id="artistConfirmForm">
               <input type="hidden" name="draft_id">
-              <div class="form-field">
-                <label class="form-label" for="artistConfirmName">Artist Name</label>
-                <input id="artistConfirmName" name="name" placeholder="Artist name" required>
-              </div>
-              <div class="form-field">
-                <label class="form-label" for="artistConfirmOrigin">Origin</label>
-                <input id="artistConfirmOrigin" name="origin" placeholder="e.g. London, UK">
+              <div class="row" style="align-items:end;">
+                <div class="form-field" style="flex:3;">
+                  <label class="form-label" for="artistConfirmName">Artist Name</label>
+                  <input id="artistConfirmName" name="name" placeholder="Artist name" required>
+                </div>
+                <div class="form-field" style="flex:1;">
+                  <label class="form-label" for="artistConfirmOrigin">Origin</label>
+                  <input id="artistConfirmOrigin" name="origin" placeholder="e.g. UK">
+                </div>
               </div>
               <div class="form-field">
                 <label class="form-label" for="artistConfirmDescription">Description</label>
@@ -1364,7 +1371,7 @@ def render_artists_page(
               </div>
               <div class="form-field">
                 <label class="form-label" for="artistConfirmPageUrl">Artist Page URL</label>
-                <input id="artistConfirmPageUrl" name="external_url" placeholder="Official site, Wikipedia, or main reference page">
+                <input id="artistConfirmPageUrl" name="external_url" placeholder="Official site, Wikipedia, or main reference page" style="font-size:0.9em;">
               </div>
               <div class="row">
                 <button type="submit">Confirm Import</button>
@@ -1380,13 +1387,15 @@ def render_artists_page(
           <div class="panel-title">Manual Artist</div>
           <form id="artistForm">
             <input type="hidden" name="artist_id">
-            <div class="form-field">
-              <label class="form-label" for="artistFormName">Artist Name</label>
-              <input id="artistFormName" name="name" placeholder="Artist name" required>
-            </div>
-            <div class="form-field">
-              <label class="form-label" for="artistFormOrigin">Origin</label>
-              <input id="artistFormOrigin" name="origin" placeholder="e.g. London, UK">
+            <div class="row" style="align-items:end;">
+              <div class="form-field" style="flex:3;">
+                <label class="form-label" for="artistFormName">Artist Name</label>
+                <input id="artistFormName" name="name" placeholder="Artist name" required>
+              </div>
+              <div class="form-field" style="flex:1;">
+                <label class="form-label" for="artistFormOrigin">Origin</label>
+                <input id="artistFormOrigin" name="origin" placeholder="e.g. UK">
+              </div>
             </div>
             <div class="form-field">
               <label class="form-label" for="artistFormDescription">Description</label>
@@ -1394,7 +1403,7 @@ def render_artists_page(
             </div>
             <div class="form-field">
               <label class="form-label" for="artistFormPageUrl">Artist Page URL</label>
-              <input id="artistFormPageUrl" name="external_url" placeholder="Official site, Wikipedia, or main reference page">
+              <input id="artistFormPageUrl" name="external_url" placeholder="Official site, Wikipedia, or main reference page" style="font-size:0.9em;">
             </div>
             <div class="row">
               <button type="submit">Save Artist</button>
@@ -1612,7 +1621,9 @@ def render_artists_page(
           const q = (document.getElementById("artistSearch")?.value || "").trim().toLowerCase();
           const genre = (document.getElementById("artistGenreFilter")?.value || "").toLowerCase();
           const hasFilter = q !== "" || genre !== "" || activeLetter !== "";
-          document.querySelectorAll("#artistList .artist-card").forEach(card => {{
+          const artistList = document.getElementById("artistList");
+          const cards = Array.from(artistList.querySelectorAll(".artist-card"));
+          cards.forEach(card => {{
             const recentIndex = Number(card.dataset.recentIndex || 0);
             const name = card.dataset.name || "";
             const firstChar = name.charAt(0);
@@ -1624,6 +1635,12 @@ def render_artists_page(
             const genreMatch = genre === "" || genres.split("|").some(g => g.includes(genre));
             card.classList.toggle("hidden", !(letterMatch && textMatch && genreMatch) || (!hasFilter && recentIndex >= 20));
           }});
+          if (hasFilter) {{
+            cards.sort((a, b) => (a.dataset.name || "").localeCompare(b.dataset.name || ""));
+          }} else {{
+            cards.sort((a, b) => Number(a.dataset.recentIndex || 0) - Number(b.dataset.recentIndex || 0));
+          }}
+          cards.forEach(card => artistList.appendChild(card));
           const hint = document.getElementById("artistFilterHint");
           if (hint) {{
             hint.classList.toggle("hidden", hasFilter);
@@ -1673,39 +1690,41 @@ def render_artist_detail_page(
       <section class="panel" style="margin-top:20px;">
         <div class="detail-head">
           <div class="panel-title" style="margin-bottom:0;">Artist Overview</div>
-          <div class="row" style="justify-content:flex-end; flex:0 0 auto;">
+          <div class="row" style="justify-content:flex-end; flex:0 0 auto; align-items:center;">
             {source_link}
             <button type="button" id="artistDeleteButton" class="danger">Delete Artist</button>
-            <a class="secondary" href="/artists" style="display:inline-flex; align-items:center; text-decoration:none; border-radius:999px; padding:11px 16px; background:rgba(255,255,255,0.08); color:var(--ink);">Back To Artists</a>
+            <a class="secondary" href="/artists" style="display:inline-flex; align-items:center; text-decoration:none; border-radius:999px; padding:11px 16px; background:rgba(255,255,255,0.08); color:var(--ink); white-space:nowrap;">Back To Artists</a>
           </div>
         </div>
         <div id="{clamp_id}" class="clamp muted">{_escape(artist.description or 'No description yet.')}</div>
         <button type="button" class="toggle-link" data-toggle-clamp="{clamp_id}">MORE</button>
-        {f'<div class="meta-item" style="margin-top:10px;"><span class="meta-item-label">Origin</span>{_escape(artist.origin)}</div>' if artist.origin else ''}
-        <div class="meta-stack" style="margin-top:14px;">
-          <button type="button" id="artistEditToggle" class="secondary" style="width:100%; margin-bottom:8px;">Edit Artist Metadata</button>
-          <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px;">
-            <input id="artistRefreshUrlInput" placeholder="Source URL (optional)" value="{_escape(artist.external_url)}" style="flex:1; min-width:0; font-size:0.82em; padding:5px 8px;">
+        {f'<div class="meta-item" style="margin-top:10px; display:inline-block;"><span class="meta-item-label">Origin</span>{_escape(artist.origin)}</div>' if artist.origin else ''}
+        <div class="meta-stack" style="margin-top:14px; width:100%;">
+          <button type="button" id="artistEditToggle" class="secondary" style="margin-bottom:8px;">Edit Artist Metadata</button>
+          <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px; width:100%; max-width:none; justify-self:stretch;">
+            <input id="artistRefreshUrlInput" placeholder="Source URL (optional)" value="{_escape(artist.external_url)}" style="flex:1 1 auto; min-width:0; max-width:none; font-size:0.82em; padding:5px 8px;">
             <button type="button" id="artistRefreshBtn" class="secondary" style="white-space:nowrap; flex:0 0 auto;" title="Re-fetch metadata from source URL using AI">&#8635; Refresh</button>
             <button type="button" id="artistRefreshCancelBtn" class="secondary hidden" style="white-space:nowrap; flex:0 0 auto;">Cancel</button>
           </div>
           <div id="artistRefreshProgress" style="display:none; margin-bottom:4px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
             <div id="artistRefreshBar" style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
           </div>
-          <div class="status" id="artistRefreshStatus" style="text-align:center; font-size:0.85em; margin-bottom:4px;"></div>
+          <div class="status" id="artistRefreshStatus" style="text-align:center; font-size:0.85em; margin-bottom:4px; justify-self:stretch;"></div>
         </div>
       </section>
       <section class="panel hidden" id="artistRefreshReview" style="margin-top:16px;">
         <div class="panel-title">Review Refreshed Artist Metadata</div>
         <form id="artistRefreshForm">
           <input type="hidden" name="draft_id" id="artistRefreshDraftId">
-          <div class="form-field">
-            <label class="form-label">Name</label>
-            <input name="name" id="artistRefreshName">
-          </div>
-          <div class="form-field">
-            <label class="form-label">Origin</label>
-            <input name="origin" id="artistRefreshOrigin" placeholder="Country or city">
+          <div class="row" style="align-items:end;">
+            <div class="form-field" style="flex:3;">
+              <label class="form-label">Name</label>
+              <input name="name" id="artistRefreshName">
+            </div>
+            <div class="form-field" style="flex:1;">
+              <label class="form-label">Origin</label>
+              <input name="origin" id="artistRefreshOrigin" placeholder="Country or city">
+            </div>
           </div>
           <div class="form-field">
             <label class="form-label">Description</label>
@@ -1713,7 +1732,7 @@ def render_artist_detail_page(
           </div>
           <div class="form-field">
             <label class="form-label">External URL</label>
-            <input name="external_url" id="artistRefreshExternalUrl" placeholder="https://...">
+            <input name="external_url" id="artistRefreshExternalUrl" placeholder="https://..." style="font-size:0.9em;">
           </div>
           <div class="row">
             <button type="submit">Apply Changes</button>
@@ -1727,17 +1746,19 @@ def render_artist_detail_page(
           <div class="panel-title" style="margin-bottom:0;">Edit Artist</div>
         </div>
         <form id="artistDetailForm">
-          <div class="form-field">
-            <label class="form-label" for="artistEditName">Name</label>
-            <input id="artistEditName" name="name" value="{_escape(artist.name)}" required>
-          </div>
-          <div class="form-field">
-            <label class="form-label" for="artistEditOrigin">Origin</label>
-            <input id="artistEditOrigin" name="origin" value="{_escape(artist.origin or '')}" placeholder="e.g. UK, London">
+          <div class="row" style="align-items:end;">
+            <div class="form-field" style="flex:3;">
+              <label class="form-label" for="artistEditName">Name</label>
+              <input id="artistEditName" name="name" value="{_escape(artist.name)}" required>
+            </div>
+            <div class="form-field" style="flex:1;">
+              <label class="form-label" for="artistEditOrigin">Origin</label>
+              <input id="artistEditOrigin" name="origin" value="{_escape(artist.origin or '')}" placeholder="e.g. UK">
+            </div>
           </div>
           <div class="form-field">
             <label class="form-label" for="artistEditExternalUrl">External URL</label>
-            <input id="artistEditExternalUrl" name="external_url" value="{_escape(artist.external_url or '')}" placeholder="https://www.metal-archives.com/bands/...">
+            <input id="artistEditExternalUrl" name="external_url" value="{_escape(artist.external_url or '')}" placeholder="https://www.metal-archives.com/bands/..." style="font-size:0.9em;">
           </div>
           <div class="form-field">
             <label class="form-label" for="artistEditDescription">Description</label>
@@ -2700,9 +2721,9 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               {_album_detail_listen_action(album)}
             </div>
             <div class="status album-listened-state" data-album-id="{album.id}" style="text-align:center;">{"Listened" if album.listened_at else "Not Listened"}</div>
-            <button type="button" id="albumEditToggle" class="secondary" style="width:100%; margin-bottom:8px;">Edit Album Metadata</button>
+            <button type="button" id="albumEditToggle" class="secondary" style="margin-bottom:8px;">Edit Album Metadata</button>
             <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px;">
-              <button type="button" id="albumRefreshBtn" class="secondary" style="width:100%;" title="Re-fetch metadata from source URL using AI">&#8635; Refresh Metadata</button>
+              <button type="button" id="albumRefreshBtn" class="secondary" title="Re-fetch metadata from source URL using AI">&#8635; Refresh Metadata</button>
             </div>
             <div id="albumRefreshSourcePanel" class="hidden" style="margin-bottom:4px;">
               <input id="albumRefreshUrlInput" placeholder="https://..." value="{_escape(album.album_external_url)}" style="font-size:0.82em; padding:5px 8px; margin-bottom:4px;">
@@ -2715,7 +2736,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               <div id="albumRefreshBar" style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
             </div>
             <div class="status" id="albumRefreshStatus" style="text-align:center; font-size:0.85em; margin-bottom:4px;"></div>
-            <button type="button" id="albumDeleteButton" class="danger" style="width:100%; margin-bottom:8px;">Delete Album</button>
+            <button type="button" id="albumDeleteButton" class="danger" style="margin-bottom:8px;">Delete Album</button>
           </div>
         </div>
         <div class="grid" style="align-self:start; margin-top:0;">
