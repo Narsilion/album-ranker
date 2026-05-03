@@ -1,0 +1,30 @@
+# Local environment and runtime data
+.env
+.env.*
+.data/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python caches and test caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build and packaging output
+build/
+dist/
+*.egg-info/
+*.egg
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
