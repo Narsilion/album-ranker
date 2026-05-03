@@ -205,6 +205,21 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         background: linear-gradient(135deg, rgba(255, 122, 61, 0.2), rgba(255, 154, 87, 0.12));
         border-color: rgba(255, 122, 61, 0.32);
       }}
+      a:focus-visible,
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      textarea:focus-visible,
+      [tabindex]:focus-visible {{
+        outline: 3px solid var(--accent-strong);
+        outline-offset: 3px;
+        box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 22%, transparent);
+      }}
+      input:focus-visible,
+      select:focus-visible,
+      textarea:focus-visible {{
+        border-color: color-mix(in srgb, var(--accent-strong) 72%, rgba(163, 187, 209, 0.16));
+      }}
       .sidebar-foot {{
         margin-top: 28px;
         color: var(--muted);
@@ -232,6 +247,19 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0));
         border: 1px solid var(--line);
         box-shadow: var(--shadow);
+      }}
+      .hero.compact {{
+        padding: 18px 20px;
+        border-radius: 20px;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
+      }}
+      .hero.compact h1 {{
+        font-size: clamp(28px, 3vw, 40px);
+        line-height: 1.02;
+      }}
+      .hero.compact p {{
+        margin-top: 8px;
+        line-height: 1.5;
       }}
       .eyebrow {{
         margin: 0 0 10px;
@@ -334,9 +362,51 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         background: rgba(255, 255, 255, 0.08);
         color: var(--ink);
       }}
+      .button-link {{
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        border-radius: 999px;
+        padding: 11px 16px;
+        color: var(--ink);
+        white-space: nowrap;
+      }}
+      .button-link.secondary {{
+        background: rgba(255, 255, 255, 0.08);
+      }}
+      .icon-action {{
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        padding: 0;
+        color: var(--ink);
+        text-decoration: none;
+        font-size: 15px;
+        background: rgba(255, 255, 255, 0.07);
+      }}
       button.danger {{
         background: rgba(219, 90, 99, 0.14);
         color: #ffd8dc;
+      }}
+      .danger-zone {{
+        margin-top: 16px;
+        padding: 14px;
+        border: 1px solid rgba(219, 90, 99, 0.28);
+        border-radius: 16px;
+        background: rgba(219, 90, 99, 0.08);
+      }}
+      .danger-zone .panel-title {{
+        color: #ffd8dc;
+      }}
+      .danger-zone p {{
+        margin: 0 0 12px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
       }}
       .aa-tab.active {{
         background: linear-gradient(135deg, rgba(255, 122, 61, 0.92), rgba(255, 154, 87, 0.86));
@@ -349,14 +419,80 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         color: var(--muted);
         font-size: 13px;
       }}
+      .status.compact {{
+        text-align: center;
+        font-size: 0.85em;
+        margin-bottom: 4px;
+      }}
+      .status[data-state="loading"] {{
+        color: var(--accent-strong);
+      }}
+      .status[data-state="success"] {{
+        color: #89d88f;
+      }}
+      .status[data-state="error"] {{
+        color: #ffd8dc;
+      }}
+      button:disabled {{
+        opacity: 0.55;
+        cursor: wait;
+      }}
+      #globalToast {{
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%) translateY(12px);
+        background: #2a1a1a;
+        color: #ffd8dc;
+        border: 1px solid rgba(219, 90, 99, 0.45);
+        padding: 11px 20px;
+        border-radius: 999px;
+        font-size: 14px;
+        box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.2s, transform 0.2s;
+        z-index: 9999;
+        white-space: nowrap;
+        max-width: 90vw;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }}
+      #globalToast.visible {{
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }}
+      .form-note {{
+        margin-top: 6px;
+        font-size: 0.85em;
+      }}
+      .warning-box {{
+        margin-top: 10px;
+        padding: 10px 12px;
+        border-radius: 6px;
+        background: rgba(255, 200, 0, 0.1);
+        border: 1px solid rgba(255, 200, 0, 0.3);
+        color: var(--ink);
+        font-size: 0.88em;
+      }}
+      .compact-url-input {{
+        font-size: 0.82em;
+        padding: 5px 8px;
+      }}
       .album-grid {{
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
         gap: 18px;
       }}
       .album-card {{
-        text-decoration: none;
         color: inherit;
+      }}
+      .album-card-link {{
+        color: inherit;
+        text-decoration: none;
+      }}
+      .cover-frame {{
+        position: relative;
       }}
       .cover {{
         aspect-ratio: 1 / 1;
@@ -365,8 +501,8 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         overflow: hidden;
         background: #101a24;
         box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
-        position: relative;
         cursor: pointer;
+        display: block;
       }}
       .cover img {{
         width: 100%;
@@ -416,8 +552,10 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
       .cover-listened-btn {{
         left: 8px;
       }}
-      .cover:hover .cover-bookmark-btn,
-      .cover:hover .cover-listened-btn,
+      .cover-frame:hover .cover-bookmark-btn,
+      .cover-frame:hover .cover-listened-btn,
+      .cover-frame:focus-within .cover-bookmark-btn,
+      .cover-frame:focus-within .cover-listened-btn,
       .cover-bookmark-btn[data-bookmarked="true"] {{
         opacity: 1;
       }}
@@ -433,6 +571,7 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         background: rgba(0,0,0,0.8);
       }}
       .album-title {{
+        display: block;
         margin-top: 12px;
         font-weight: 600;
       }}
@@ -546,9 +685,39 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
+        align-items: center;
       }}
       .filters select, .filters input {{
         max-width: 240px;
+      }}
+      .filters .wide-search {{
+        max-width: 360px;
+        min-width: 240px;
+        flex: 1 1 260px;
+      }}
+      .filter-meta {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin: 0 0 12px;
+      }}
+      .filter-meta .muted {{
+        margin: 0;
+      }}
+      .filter-count {{
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 600;
+      }}
+      .empty-filter-state {{
+        margin: 0 0 14px;
+        padding: 14px 16px;
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.025);
       }}
       .artist-card {{
         padding: 18px;
@@ -811,6 +980,99 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           grid-template-columns: 1fr;
         }}
       }}
+      @media (hover: none), (pointer: coarse) {{
+        .cover-frame .cover-bookmark-btn,
+        .cover-frame .cover-listened-btn {{
+          width: 38px;
+          height: 38px;
+          opacity: 1;
+        }}
+        .cover-upload-overlay {{
+          opacity: 1;
+        }}
+      }}
+      @media (max-width: 640px) {{
+        .content {{
+          padding: 14px;
+        }}
+        .sidebar {{
+          padding: 18px 14px;
+        }}
+        .brand {{
+          font-size: 28px;
+          margin-bottom: 18px;
+        }}
+        .nav {{
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }}
+        .nav-link {{
+          padding: 10px 11px;
+          border-radius: 12px;
+          text-align: center;
+        }}
+        .hero {{
+          padding: 20px;
+          border-radius: 20px;
+        }}
+        h1 {{
+          font-size: 34px;
+          line-height: 1;
+        }}
+        .panel {{
+          padding: 16px;
+          border-radius: 18px;
+        }}
+        .detail-head {{
+          align-items: stretch;
+          flex-direction: column;
+        }}
+        .detail-head > .row,
+        .filters,
+        .mini-actions {{
+          width: 100%;
+        }}
+        .filters select,
+        .filters input,
+        .genre-tag-picker select {{
+          max-width: none;
+        }}
+        .album-grid {{
+          grid-template-columns: repeat(auto-fill, minmax(135px, 1fr));
+          gap: 14px;
+        }}
+        .row {{
+          align-items: stretch;
+        }}
+        .row > button,
+        .row > a.secondary,
+        .album-card-actions button {{
+          flex: 1 1 140px;
+        }}
+        .letter-btn {{
+          min-width: 28px;
+          padding: 5px 7px;
+        }}
+        .track-row {{
+          grid-template-columns: 34px minmax(0, 1fr) auto;
+          gap: 8px;
+          padding: 9px 10px;
+          font-size: 14px;
+        }}
+        .rank-item {{
+          grid-template-columns: 34px 52px minmax(0, 1fr);
+          gap: 10px;
+          padding: 12px;
+        }}
+        .rank-cover {{
+          width: 52px;
+          height: 52px;
+          border-radius: 12px;
+        }}
+        .rank-item .mini-actions {{
+          grid-column: 1 / -1;
+        }}
+      }}
     </style>
   </head>
   <body>
@@ -877,6 +1139,48 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           .replaceAll("<", "&lt;")
           .replaceAll(">", "&gt;")
           .replaceAll('"', "&quot;");
+      }}
+      function statusState(text) {{
+        const value = String(text || "").trim().toLowerCase();
+        if (!value) return "";
+        if (/\\b(saving|creating|fetching|generating|deleting|adding|regenerating|uploading)\\b/.test(value)) return "loading";
+        if (/\\b(saved|ready|added|updated|uploaded|complete|success)\\b/.test(value)) return "success";
+        if (/\\b(failed|error|invalid|required|choose|missing|not found|not configured|must|cannot|no source)\\b/.test(value)) return "error";
+        return "";
+      }}
+      function syncStatusElement(el) {{
+        if (!el) return;
+        if (!el.hasAttribute("role")) el.setAttribute("role", "status");
+        if (!el.hasAttribute("aria-live")) el.setAttribute("aria-live", "polite");
+        if (!el.hasAttribute("aria-atomic")) el.setAttribute("aria-atomic", "true");
+        const state = statusState(el.textContent);
+        if (state) {{
+          el.dataset.state = state;
+        }} else {{
+          delete el.dataset.state;
+        }}
+      }}
+      function initStatusRegions(root = document) {{
+        root.querySelectorAll(".status").forEach((el) => {{
+          syncStatusElement(el);
+          if (el._statusObserver) return;
+          const observer = new MutationObserver(() => syncStatusElement(el));
+          observer.observe(el, {{ childList: true, characterData: true, subtree: true }});
+          el._statusObserver = observer;
+        }});
+      }}
+      initStatusRegions();
+      let _toastTimer = null;
+      function showToast(message) {{
+        const toast = document.getElementById("globalToast");
+        if (!toast) return;
+        toast.textContent = message;
+        toast.classList.add("visible");
+        if (_toastTimer) clearTimeout(_toastTimer);
+        _toastTimer = setTimeout(() => {{
+          toast.classList.remove("visible");
+          _toastTimer = null;
+        }}, 4000);
       }}
       function formatDuration(seconds) {{
         if (seconds === null || seconds === undefined || seconds === "") return "";
@@ -1012,9 +1316,13 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           button.classList.add("hidden");
           return;
         }}
+        button.setAttribute("aria-controls", target.id);
+        button.setAttribute("aria-expanded", target.classList.contains("expanded") ? "true" : "false");
         button.addEventListener("click", () => {{
           target.classList.toggle("expanded");
-          button.textContent = target.classList.contains("expanded") ? "LESS" : "MORE";
+          const isExpanded = target.classList.contains("expanded");
+          button.textContent = isExpanded ? "LESS" : "MORE";
+          button.setAttribute("aria-expanded", isExpanded ? "true" : "false");
         }});
       }});
       function updateAlbumListenState(albumId, payload) {{
@@ -1053,7 +1361,8 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           event.preventDefault();
           event.stopPropagation();
           const albumId = button.dataset.albumId;
-          const nextBookmarked = button.dataset.bookmarked !== "true";
+          const prevBookmarked = button.dataset.bookmarked === "true";
+          const nextBookmarked = !prevBookmarked;
           button.disabled = true;
           try {{
             const payload = await fetchJson(`/api/albums/${{albumId}}/bookmark`, {{
@@ -1071,7 +1380,8 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
               }}
             }}
           }} catch (error) {{
-            window.alert(error.message || "Bookmark update failed.");
+            button.dataset.bookmarked = prevBookmarked ? "true" : "false";
+            showToast(error.message || "Bookmark update failed.");
           }} finally {{
             button.disabled = false;
           }}
@@ -1082,7 +1392,8 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           event.preventDefault();
           event.stopPropagation();
           const albumId = button.dataset.albumId;
-          const nextListened = button.dataset.listened !== "true";
+          const prevListened = button.dataset.listened === "true";
+          const nextListened = !prevListened;
           button.disabled = true;
           try {{
             const payload = await fetchJson(`/api/albums/${{albumId}}/listened`, {{
@@ -1091,13 +1402,15 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
             }});
             updateAlbumListenState(albumId, payload);
           }} catch (error) {{
-            window.alert(error.message || "Listened update failed.");
+            button.dataset.listened = prevListened ? "true" : "false";
+            showToast(error.message || "Listened update failed.");
           }} finally {{
             button.disabled = false;
           }}
         }});
       }});
     </script>
+    <div id="globalToast" role="alert" aria-live="assertive" aria-atomic="true"></div>
   </body>
 </html>"""
 
@@ -1160,15 +1473,20 @@ def _album_card_markup(
     )
     actions = f'<div class="album-card-actions">{listened_button}</div>' if listened_button else ""
     return f"""
-      <a class="album-card{(' ' + extra_class) if extra_class else ''}" href="/albums/{album.id}" data-genre="{_escape(album.genre)}" data-year="{_escape(str(album.release_year or ''))}" data-artist="{_escape(album.artist_name)}" data-title="{_escape(album.title)}"{(' ' + extra_attrs) if extra_attrs else ''}>
-        <div class="cover"><img src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover">{cover_listened_btn}{cover_bookmark_btn}</div>
-        <div class="album-title">{_escape(album.title)}</div>
+      <article class="album-card{(' ' + extra_class) if extra_class else ''}" data-genre="{_escape(album.genre)}" data-year="{_escape(str(album.release_year or ''))}" data-artist="{_escape(album.artist_name)}" data-title="{_escape(album.title)}"{(' ' + extra_attrs) if extra_attrs else ''}>
+        <div class="cover-frame">
+          <a class="cover album-card-link" href="/albums/{album.id}" aria-label="Open {_escape(album.title)}">
+            <img src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover">
+          </a>
+          {cover_listened_btn}{cover_bookmark_btn}
+        </div>
+        <a class="album-title album-card-link" href="/albums/{album.id}">{_escape(album.title)}</a>
         {f'<div class="album-type muted">{_escape(album.album_type)}</div>' if album.album_type else ''}
         <div class="album-subtitle">{_escape(artist_line)}</div>
         <div class="album-genre">{_escape(genre_line)}</div>
         {rating_widget}
         {actions}
-      </a>
+      </article>
     """
 
 
@@ -1263,9 +1581,9 @@ def _list_markup(record: AlbumListRecord, all_albums: "list[AlbumCardRecord] | N
         existing_ids = {item.album.id for item in record.items}
         available = [a for a in all_albums if a.id not in existing_ids]
         albums_json = _escape(_json([{"id": a.id, "label": f"{a.artist_name} - {a.title}"} for a in available]))
-        add_btn = "<button type='button' class='list-add-toggle secondary'>+ Add album</button>"
+        add_btn = f"<button type='button' class='list-add-toggle secondary' aria-controls='list-add-panel-{record.id}' aria-expanded='false'>+ Add album</button>"
         add_panel = f"""
-          <div class="list-add-panel hidden" style="padding:12px 18px; border-top:1px solid var(--line);" data-albums="{albums_json}">
+          <div id="list-add-panel-{record.id}" class="list-add-panel hidden" style="padding:12px 18px; border-top:1px solid var(--line);" data-albums="{albums_json}">
             <form class="list-add-form">
               <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                 <input class="list-add-picker" placeholder="Search albums\u2026" autocomplete="off" style="flex:1; min-width:180px;">
@@ -1284,11 +1602,11 @@ def _list_markup(record: AlbumListRecord, all_albums: "list[AlbumCardRecord] | N
             <div class="muted" style="font-size:12px; margin-top:2px;">{_escape(record.description)} {_escape(", ".join(record.genres))} {_escape(str(record.year or ''))}</div>
           </div>
           <div style="display:flex; gap:6px; align-items:center; flex:0 0 auto;">
-            <a href="/lists/{record.id}" class="secondary" onclick="event.stopPropagation();" style="display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:50%; background:rgba(255,255,255,0.07); color:var(--ink); text-decoration:none; font-size:15px;" title="Edit list details">&#9998;</a>
-            <button type="button" class="secondary list-toggle-btn" style="width:34px; height:34px; border-radius:50%; padding:0; display:inline-flex; align-items:center; justify-content:center;">&#9660;</button>
+            <a href="/lists/{record.id}" class="icon-action" onclick="event.stopPropagation();" title="Edit list details" aria-label="Edit {_escape(record.name)} list details">&#9998;</a>
+            <button type="button" class="secondary icon-action list-toggle-btn" aria-controls="list-body-{record.id}" aria-expanded="false" aria-label="Show list items">&#9660;</button>
           </div>
         </div>
-        <div id="list-body-{record.id}" class="hidden">
+        <div id="list-body-{record.id}" class="hidden" role="region" aria-label="{_escape(record.name)} items">
           <div class="rank-list">{items}</div>
           <div style="padding:14px 18px; border-top:1px solid var(--line); display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
             <button type="button" class="save-order">Save</button>
@@ -1317,14 +1635,14 @@ def render_artists_page(
             extra_attrs=f'data-recent-index="{index}"',
         )
         for index, artist in enumerate(recent_artists)
-    ) or '<p class="muted">No artists yet.</p>'
+    ) or '<p class="muted">No artists yet. Use Artist Tools above to add your first artist or import one from Metal Archives.</p>'
     has_artists = bool(artists)
     genre_options = "".join(
         f'<option value="{_escape(genre.name)}">{_escape(genre.name)}</option>'
         for genre in genres
     )
     body = f"""
-      <section class="hero">
+      <section class="hero compact">
         <div class="eyebrow">Artists</div>
         <h1>Build a library around artists</h1>
         <p>Keep the band description, source link, and album catalog together. Import when it helps, edit everything when it does not.</p>
@@ -1332,7 +1650,7 @@ def render_artists_page(
       <section class="panel" style="margin-top:20px;">
         <div class="detail-head">
           <div class="panel-title" style="margin-bottom:0;">Artist Tools</div>
-          {('<button type="button" id="artistToolsToggle" class="secondary" title="Toggle artist tools">Show Tools</button>' if has_artists else '')}
+          {('<button type="button" id="artistToolsToggle" class="secondary" title="Toggle artist tools" aria-controls="artistToolsPanel" aria-expanded="false">Show Tools</button>' if has_artists else '')}
         </div>
       </section>
       <div id="artistToolsPanel" class="grid two {('hidden' if has_artists else '')}">
@@ -1377,7 +1695,7 @@ def render_artists_page(
                 <button type="submit">Confirm Import</button>
                 <button type="button" class="secondary" id="artistImportReset">Clear</button>
               </div>
-              <div id="artistDuplicateWarning" class="hidden" style="margin-top:10px; padding:10px 12px; background:rgba(255,200,0,0.1); border:1px solid rgba(255,200,0,0.3); border-radius:6px; font-size:0.88em; color:var(--ink);">
+              <div id="artistDuplicateWarning" class="warning-box hidden">
                 An artist named <strong id="artistDuplicateName"></strong> already exists in your library. <a id="artistDuplicateLink" href="#" target="_blank">Review existing artist</a>. You can still confirm to add another artist with the same name.
               </div>
             </form>
@@ -1416,9 +1734,10 @@ def render_artists_page(
       <section class="panel" style="margin-top:20px;">
         <div class="detail-head" style="margin-bottom:12px;">
           <div class="panel-title" style="margin-bottom:0;">Library Artists</div>
-          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-            <input id="artistSearch" type="search" placeholder="Search artists…" style="max-width:260px;">
+          <div class="filters">
+            <input id="artistSearch" class="wide-search" type="search" placeholder="Search artists…">
             <select id="artistGenreFilter"><option value="">Genre</option>{genre_options}</select>
+            <button type="button" class="secondary" id="artistFilterClear">Clear Filters</button>
           </div>
         </div>
         <div id="artistLetterBar" style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:14px;">
@@ -1426,7 +1745,11 @@ def render_artists_page(
           {''.join(f'<button type="button" class="letter-btn" data-letter="{c}">{c}</button>' for c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')}
           <button type="button" class="letter-btn" data-letter="#">#</button>
         </div>
-        {('<p id="artistFilterHint" class="muted">Showing the 20 most recently added artists. Use filters to search the full library.</p>' if len(artists) > 20 else '')}
+        <div class="filter-meta">
+          {('<p id="artistFilterHint" class="muted">Showing the 20 most recently added artists. Use filters to search the full library.</p>' if len(artists) > 20 else '<span></span>')}
+          <div id="artistFilterCount" class="filter-count"></div>
+        </div>
+        <p id="artistFilterEmpty" class="empty-filter-state hidden">No artists match the current filters.</p>
         <div id="artistList">{artists_markup}</div>
       </section>
       <script>
@@ -1440,7 +1763,9 @@ def render_artists_page(
         const artistToolsToggle = document.getElementById("artistToolsToggle");
         function syncArtistToolsToggle() {{
           if (!artistToolsToggle) return;
-          artistToolsToggle.textContent = artistToolsPanel.classList.contains("hidden") ? "Show Tools" : "Hide Tools";
+          const isOpen = !artistToolsPanel.classList.contains("hidden");
+          artistToolsToggle.textContent = isOpen ? "Hide Tools" : "Show Tools";
+          artistToolsToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
         }}
         artistToolsToggle?.addEventListener("click", () => {{
           artistToolsPanel.classList.toggle("hidden");
@@ -1502,7 +1827,7 @@ def render_artists_page(
               await fetchJson(`/api/artists/${{button.dataset.artistId}}`, {{ method: "DELETE" }});
               window.location.reload();
             }} catch (error) {{
-              window.alert(error.message);
+              artistFormStatus.textContent = error.message || "Delete failed.";
             }}
           }});
         }});
@@ -1623,6 +1948,7 @@ def render_artists_page(
           const hasFilter = q !== "" || genre !== "" || activeLetter !== "";
           const artistList = document.getElementById("artistList");
           const cards = Array.from(artistList.querySelectorAll(".artist-card"));
+          let visibleCount = 0;
           cards.forEach(card => {{
             const recentIndex = Number(card.dataset.recentIndex || 0);
             const name = card.dataset.name || "";
@@ -1633,7 +1959,11 @@ def render_artists_page(
             const textMatch = q === "" || name.includes(q);
             const genres = (card.dataset.genres || "").toLowerCase();
             const genreMatch = genre === "" || genres.split("|").some(g => g.includes(genre));
-            card.classList.toggle("hidden", !(letterMatch && textMatch && genreMatch) || (!hasFilter && recentIndex >= 20));
+            const isHidden = !(letterMatch && textMatch && genreMatch) || (!hasFilter && recentIndex >= 20);
+            card.classList.toggle("hidden", isHidden);
+            if (!isHidden) {{
+              visibleCount += 1;
+            }}
           }});
           if (hasFilter) {{
             cards.sort((a, b) => (a.dataset.name || "").localeCompare(b.dataset.name || ""));
@@ -1644,6 +1974,14 @@ def render_artists_page(
           const hint = document.getElementById("artistFilterHint");
           if (hint) {{
             hint.classList.toggle("hidden", hasFilter);
+          }}
+          const count = document.getElementById("artistFilterCount");
+          if (count) {{
+            count.textContent = `Showing ${{visibleCount}} of ${{cards.length}} artists`;
+          }}
+          const empty = document.getElementById("artistFilterEmpty");
+          if (empty) {{
+            empty.classList.toggle("hidden", visibleCount > 0);
           }}
         }}
         document.querySelectorAll("#artistLetterBar .letter-btn").forEach(btn => {{
@@ -1661,6 +1999,22 @@ def render_artists_page(
         if (artistGenreFilter) {{
           artistGenreFilter.addEventListener("change", applyArtistFilters);
         }}
+        const artistFilterClear = document.getElementById("artistFilterClear");
+        if (artistFilterClear) {{
+          artistFilterClear.addEventListener("click", () => {{
+            activeLetter = "";
+            if (artistSearch) {{
+              artistSearch.value = "";
+            }}
+            if (artistGenreFilter) {{
+              artistGenreFilter.value = "";
+            }}
+            document.querySelectorAll("#artistLetterBar .letter-btn").forEach(b => b.classList.toggle("active", b.dataset.letter === ""));
+            applyArtistFilters();
+            artistSearch?.focus();
+          }});
+        }}
+        applyArtistFilters();
       </script>
     """
     state = {"settings": settings.model_dump(), "album_detail_link": "/albums"}
@@ -1692,24 +2046,28 @@ def render_artist_detail_page(
           <div class="panel-title" style="margin-bottom:0;">Artist Overview</div>
           <div class="row" style="justify-content:flex-end; flex:0 0 auto; align-items:center;">
             {source_link}
-            <button type="button" id="artistDeleteButton" class="danger">Delete Artist</button>
-            <a class="secondary" href="/artists" style="display:inline-flex; align-items:center; text-decoration:none; border-radius:999px; padding:11px 16px; background:rgba(255,255,255,0.08); color:var(--ink); white-space:nowrap;">Back To Artists</a>
+            <a class="button-link secondary" href="/artists">Back to Artists</a>
           </div>
         </div>
         <div id="{clamp_id}" class="clamp muted">{_escape(artist.description or 'No description yet.')}</div>
-        <button type="button" class="toggle-link" data-toggle-clamp="{clamp_id}">MORE</button>
+        <button type="button" class="toggle-link" data-toggle-clamp="{clamp_id}" aria-controls="{clamp_id}" aria-expanded="false">MORE</button>
         {f'<div class="meta-item" style="margin-top:10px; display:inline-block;"><span class="meta-item-label">Origin</span>{_escape(artist.origin)}</div>' if artist.origin else ''}
         <div class="meta-stack" style="margin-top:14px; width:100%;">
-          <button type="button" id="artistEditToggle" class="secondary" style="margin-bottom:8px;">Edit Artist Metadata</button>
+          <button type="button" id="artistEditToggle" class="secondary" style="margin-bottom:8px;" aria-controls="artistEditPanel" aria-expanded="false">Edit Artist Metadata</button>
           <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px; width:100%; max-width:none; justify-self:stretch;">
-            <input id="artistRefreshUrlInput" placeholder="Source URL (optional)" value="{_escape(artist.external_url)}" style="flex:1 1 auto; min-width:0; max-width:none; font-size:0.82em; padding:5px 8px;">
+            <input id="artistRefreshUrlInput" class="compact-url-input" placeholder="Source URL (optional)" value="{_escape(artist.external_url)}" style="flex:1 1 auto; min-width:0; max-width:none;">
             <button type="button" id="artistRefreshBtn" class="secondary" style="white-space:nowrap; flex:0 0 auto;" title="Re-fetch metadata from source URL using AI">&#8635; Refresh</button>
             <button type="button" id="artistRefreshCancelBtn" class="secondary hidden" style="white-space:nowrap; flex:0 0 auto;">Cancel</button>
           </div>
           <div id="artistRefreshProgress" style="display:none; margin-bottom:4px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
             <div id="artistRefreshBar" style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
           </div>
-          <div class="status" id="artistRefreshStatus" style="text-align:center; font-size:0.85em; margin-bottom:4px; justify-self:stretch;"></div>
+          <div class="status compact" id="artistRefreshStatus" style="justify-self:stretch;"></div>
+        </div>
+        <div class="danger-zone">
+          <div class="panel-title">Danger Zone</div>
+          <p>Delete this artist and all albums attached to it.</p>
+          <button type="button" id="artistDeleteButton" class="danger">Delete Artist</button>
         </div>
       </section>
       <section class="panel hidden" id="artistRefreshReview" style="margin-top:16px;">
@@ -1774,14 +2132,14 @@ def render_artist_detail_page(
       <section class="panel" style="margin-top:20px;">
         <div class="detail-head">
           <div class="panel-title" style="margin-bottom:0;">Album Import</div>
-          <button type="button" id="artistAlbumToolsToggle" class="secondary" title="Toggle album import">Show Import</button>
+          <button type="button" id="artistAlbumToolsToggle" class="secondary" title="Toggle album import" aria-controls="artistAlbumToolsPanel" aria-expanded="false">Show Import</button>
         </div>
         <div id="artistAlbumToolsPanel" class="hidden">
-        <div class="row" style="margin-bottom:16px; gap:8px;">
-          <button type="button" class="aa-tab secondary active" data-tab="import" aria-pressed="true">Import from URL</button>
-          <button type="button" class="aa-tab secondary" data-tab="manual" aria-pressed="false">Manual</button>
+        <div class="row" role="tablist" aria-label="Album import mode" style="margin-bottom:16px; gap:8px;">
+          <button type="button" id="aa-tab-button-import" class="aa-tab secondary active" data-tab="import" role="tab" aria-selected="true" aria-controls="aa-tab-import">Import from URL</button>
+          <button type="button" id="aa-tab-button-manual" class="aa-tab secondary" data-tab="manual" role="tab" aria-selected="false" aria-controls="aa-tab-manual">Manual</button>
         </div>
-        <div id="aa-tab-import">
+        <div id="aa-tab-import" role="tabpanel" aria-labelledby="aa-tab-button-import">
         <form id="artistAlbumImportForm">
           <input type="hidden" name="artist_name" value="{_escape(artist.name)}">
           <div class="form-field">
@@ -1790,7 +2148,7 @@ def render_artist_detail_page(
               <input id="artistAlbumImportSourceUrl" name="source_url" placeholder="Source URL" required>
               <button type="button" class="input-clear-btn" aria-label="Clear">&#x2715;</button>
             </div>
-            <div class="muted" style="font-size:0.85em; margin-top:6px;">
+            <div class="form-note muted">
               Use a Metal Archives album page URL from /albums/..., not the artist page URL.
             </div>
           </div>
@@ -1855,14 +2213,14 @@ def render_artist_detail_page(
               <button type="submit">Confirm Import</button>
               <button type="button" class="secondary" id="artistAlbumImportReset">Clear</button>
             </div>
-            <div id="albumDuplicateWarning" class="hidden" style="margin-top:10px; padding:10px 12px; background:rgba(255,200,0,0.1); border:1px solid rgba(255,200,0,0.3); border-radius:6px; font-size:0.88em; color:var(--ink);">
+            <div id="albumDuplicateWarning" class="warning-box hidden">
               An album titled <strong id="albumDuplicateName"></strong> already exists for this artist. <a id="albumDuplicateLink" href="#" target="_blank">Review existing album</a>. You can still confirm to add another album with the same title.
             </div>
           </form>
         </div>
         </div>
         </div>
-        <div id="aa-tab-manual" class="hidden">
+        <div id="aa-tab-manual" class="hidden" role="tabpanel" aria-labelledby="aa-tab-button-manual" hidden>
           <form id="artistAlbumManualForm">
             <input type="hidden" name="artist_name" value="{_escape(artist.name)}">
             <div class="form-field">
@@ -1956,6 +2314,7 @@ def render_artist_detail_page(
           function syncArtistEditToggle() {{
             const isOpen = !artistEditPanel.classList.contains("hidden");
             artistEditToggle.textContent = isOpen ? "Close Editor" : "Edit Artist Metadata";
+            artistEditToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
           }}
           artistEditToggle.addEventListener("click", () => {{
             const willOpen = artistEditPanel.classList.contains("hidden");
@@ -1997,7 +2356,7 @@ def render_artist_detail_page(
               await fetchJson("/api/artists/{artist.id}", {{ method: "DELETE" }});
               window.location.href = "/artists";
             }} catch (err) {{
-              alert(err.message || "Delete failed.");
+              document.getElementById("artistDetailStatus").textContent = err.message || "Delete failed.";
             }}
           }});
         }})();
@@ -2090,7 +2449,9 @@ def render_artist_detail_page(
         const artistAlbumConfirmForm = document.getElementById("artistAlbumConfirmForm");
         const artistAlbumImportStatus = document.getElementById("artistAlbumImportStatus");
         function syncArtistAlbumToolsToggle() {{
-          artistAlbumToolsToggle.textContent = artistAlbumToolsPanel.classList.contains("hidden") ? "Show Import" : "Hide Import";
+          const isOpen = !artistAlbumToolsPanel.classList.contains("hidden");
+          artistAlbumToolsToggle.textContent = isOpen ? "Hide Import" : "Show Import";
+          artistAlbumToolsToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
         }}
         artistAlbumToolsToggle.addEventListener("click", () => {{
           artistAlbumToolsPanel.classList.toggle("hidden");
@@ -2150,7 +2511,8 @@ def render_artist_detail_page(
               )
             : null;
           if (existingAlbumCard) {{
-            document.getElementById("albumDuplicateLink").href = existingAlbumCard.getAttribute("href");
+            const existingAlbumLink = existingAlbumCard.querySelector("a[href^='/albums/']");
+            document.getElementById("albumDuplicateLink").href = existingAlbumLink ? existingAlbumLink.getAttribute("href") : "/albums";
             document.getElementById("albumDuplicateName").textContent = payload.album_title || "";
             albumWarning.classList.remove("hidden");
           }} else {{
@@ -2237,12 +2599,16 @@ def render_artist_detail_page(
           btn.addEventListener("click", () => {{
             document.querySelectorAll(".aa-tab").forEach((b) => {{
               b.classList.remove("active");
-              b.setAttribute("aria-pressed", "false");
+              b.setAttribute("aria-selected", "false");
             }});
             btn.classList.add("active");
-            btn.setAttribute("aria-pressed", "true");
-            document.getElementById("aa-tab-import").classList.toggle("hidden", btn.dataset.tab !== "import");
-            document.getElementById("aa-tab-manual").classList.toggle("hidden", btn.dataset.tab !== "manual");
+            btn.setAttribute("aria-selected", "true");
+            const importPanel = document.getElementById("aa-tab-import");
+            const manualPanel = document.getElementById("aa-tab-manual");
+            importPanel.classList.toggle("hidden", btn.dataset.tab !== "import");
+            manualPanel.classList.toggle("hidden", btn.dataset.tab !== "manual");
+            importPanel.toggleAttribute("hidden", btn.dataset.tab !== "import");
+            manualPanel.toggleAttribute("hidden", btn.dataset.tab !== "manual");
           }});
         }});
         // ── Manual album form ─────────────────────────────────────────────────
@@ -2282,7 +2648,7 @@ def render_artist_detail_page(
 
 def render_imports_page(settings: SettingsRecord) -> str:
     body = """
-      <section class="hero">
+      <section class="hero compact">
         <div class="eyebrow">Imports</div>
         <h1>Import an album from a source URL</h1>
         <p>Paste a Metal Archives album page, review the artist draft when the artist is missing, then save the album in one pass.</p>
@@ -2296,7 +2662,7 @@ def render_imports_page(settings: SettingsRecord) -> str:
               <input id="albumWithArtistSourceUrl" name="source_url" placeholder="https://www.metal-archives.com/albums/..." required>
               <button type="button" class="input-clear-btn" aria-label="Clear">&#x2715;</button>
             </div>
-            <div class="muted" style="font-size:0.85em; margin-top:6px;">
+            <div class="form-note muted">
               Use the album page URL, for example https://www.metal-archives.com/albums/For_My_Pain.../Buried_Blue/1391127
             </div>
           </div>
@@ -2585,7 +2951,7 @@ def render_albums_page(
             extra_attrs=f'data-recent-index="{index}"',
         )
         for index, album in enumerate(recent_albums)
-    ) or '<p class="muted">No albums yet.</p>'
+    ) or '<p class="muted">No albums yet. Head to an <a href="/artists">artist page</a> to import or create albums.</p>'
     genre_options = "".join(
         f'<option value="{_escape(genre.name)}">{_escape(genre.name)}</option>'
         for genre in genres
@@ -2599,7 +2965,7 @@ def render_albums_page(
         for artist in artists
     )
     body = f"""
-      <section class="hero">
+      <section class="hero compact">
         <div class="eyebrow">Albums</div>
         <h1>See the library as a wall of records</h1>
         <p>Filter by genre, year, or artist, open any cover into the full album detail view, and add manual entries from here. AI album import now lives on the Artists page so the import stays tied to the artist you picked.</p>
@@ -2609,13 +2975,18 @@ def render_albums_page(
         <div class="filters">
           <select id="genreFilter"><option value="">Genre</option>{genre_options}</select>
           <select id="yearFilter"><option value="">Year</option>{year_options}</select>
-          <input id="artistFilter" type="search" list="artistDatalist" placeholder="Artist…" autocomplete="off">
+          <input id="artistFilter" class="wide-search" type="search" list="artistDatalist" placeholder="Artist…" autocomplete="off">
+          <button type="button" class="secondary" id="albumFilterClear">Clear Filters</button>
           <datalist id="artistDatalist">{artist_options}</datalist>
         </div>
       </section>
       <section class="panel" style="margin-top:20px;">
         <div class="panel-title">Album Library</div>
-        {('<p id="albumRecentHint" class="muted" style="margin-top:0;">Showing the 20 most recently added albums. Use filters to search the full library.</p>' if len(albums) > 20 else '')}
+        <div class="filter-meta">
+          {('<p id="albumRecentHint" class="muted">Showing the 20 most recently added albums. Use filters to search the full library.</p>' if len(albums) > 20 else '<span></span>')}
+          <div id="albumFilterCount" class="filter-count"></div>
+        </div>
+        <p id="albumFilterEmpty" class="empty-filter-state hidden">No albums match the current filters.</p>
         <div id="albumGrid" class="album-grid">{albums_markup}</div>
       </section>
       <script>
@@ -2624,28 +2995,49 @@ def render_albums_page(
           const genreEl   = document.getElementById("genreFilter");
           const yearEl    = document.getElementById("yearFilter");
           const artistEl  = document.getElementById("artistFilter");
+          const clearEl   = document.getElementById("albumFilterClear");
           function applyFilters() {{
             const genre  = genreEl.value;
             const year   = yearEl.value;
             const artist = artistEl.value.trim().toLowerCase();
             const hasFilter = Boolean(genre || year || artist);
+            let visibleCount = 0;
             cards.forEach(card => {{
               const recentIndex = Number(card.dataset.recentIndex || 0);
-              card.classList.toggle("hidden",
+              const isHidden =
                 (genre  && !card.dataset.genre.toLowerCase().includes(genre.toLowerCase())) ||
                 (year   && card.dataset.year !== year) ||
                 (artist && !card.dataset.artist.toLowerCase().includes(artist)) ||
-                (!hasFilter && recentIndex >= 20)
-              );
+                (!hasFilter && recentIndex >= 20);
+              card.classList.toggle("hidden", isHidden);
+              if (!isHidden) {{
+                visibleCount += 1;
+              }}
             }});
             const hint = document.getElementById("albumRecentHint");
             if (hint) {{
               hint.classList.toggle("hidden", hasFilter);
             }}
+            const count = document.getElementById("albumFilterCount");
+            if (count) {{
+              count.textContent = `Showing ${{visibleCount}} of ${{cards.length}} albums`;
+            }}
+            const empty = document.getElementById("albumFilterEmpty");
+            if (empty) {{
+              empty.classList.toggle("hidden", visibleCount > 0);
+            }}
           }}
           [genreEl, yearEl, artistEl].forEach(el => {{
             el.addEventListener(el.tagName === "INPUT" ? "input" : "change", applyFilters);
           }});
+          clearEl?.addEventListener("click", () => {{
+            genreEl.value = "";
+            yearEl.value = "";
+            artistEl.value = "";
+            applyFilters();
+            artistEl.focus();
+          }});
+          applyFilters();
         }})();
       </script>
     """
@@ -2664,7 +3056,7 @@ def render_bookmarks_page(settings: SettingsRecord, albums: list[AlbumCardRecord
     )
     empty_class = "" if not albums else "hidden"
     body = f"""
-      <section class="hero">
+      <section class="hero compact">
         <div class="eyebrow">Bookmarks</div>
         <h1>Albums saved for later listening</h1>
         <p>Keep a focused queue of records to hear later or revisit, whether they are new to you or already listened.</p>
@@ -2721,12 +3113,12 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               {_album_detail_listen_action(album)}
             </div>
             <div class="status album-listened-state" data-album-id="{album.id}" style="text-align:center;">{"Listened" if album.listened_at else "Not Listened"}</div>
-            <button type="button" id="albumEditToggle" class="secondary" style="margin-bottom:8px;">Edit Album Metadata</button>
+            <button type="button" id="albumEditToggle" class="secondary" style="margin-bottom:8px;" aria-controls="albumEditPanel" aria-expanded="false">Edit Album Metadata</button>
             <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px;">
-              <button type="button" id="albumRefreshBtn" class="secondary" title="Re-fetch metadata from source URL using AI">&#8635; Refresh Metadata</button>
+              <button type="button" id="albumRefreshBtn" class="secondary" title="Re-fetch metadata from source URL using AI" aria-controls="albumRefreshSourcePanel" aria-expanded="false">&#8635; Refresh Metadata</button>
             </div>
             <div id="albumRefreshSourcePanel" class="hidden" style="margin-bottom:4px;">
-              <input id="albumRefreshUrlInput" placeholder="https://..." value="{_escape(album.album_external_url)}" style="font-size:0.82em; padding:5px 8px; margin-bottom:4px;">
+              <input id="albumRefreshUrlInput" class="compact-url-input" placeholder="https://..." value="{_escape(album.album_external_url)}" style="margin-bottom:4px;">
               <div style="display:flex; gap:4px; align-items:center;">
                 <button type="button" id="albumRefreshGenerateBtn" style="white-space:nowrap; flex:1 1 auto;">Generate Draft</button>
                 <button type="button" id="albumRefreshCancelBtn" class="secondary" style="white-space:nowrap; flex:0 0 auto;">Cancel</button>
@@ -2735,8 +3127,12 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             <div id="albumRefreshProgress" style="display:none; margin-bottom:4px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
               <div id="albumRefreshBar" style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
             </div>
-            <div class="status" id="albumRefreshStatus" style="text-align:center; font-size:0.85em; margin-bottom:4px;"></div>
-            <button type="button" id="albumDeleteButton" class="danger" style="margin-bottom:8px;">Delete Album</button>
+            <div class="status compact" id="albumRefreshStatus"></div>
+            <div class="danger-zone">
+              <div class="panel-title">Danger Zone</div>
+              <p>Delete this album from the library.</p>
+              <button type="button" id="albumDeleteButton" class="danger">Delete Album</button>
+            </div>
           </div>
         </div>
         <div class="grid" style="align-self:start; margin-top:0;">
@@ -2868,7 +3264,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
         {f'<a class="tag" href="{_escape(description_source_url)}" target="_blank" rel="noreferrer" style="flex:0 0 auto;">{_escape(description_source_label)}</a>' if description_source_url else ''}
         <div id="albumArtistDescription" class="clamp">{description_text}</div>
         <div class="row" style="margin-top:8px;">
-          <button type="button" class="toggle-link" data-toggle-clamp="albumArtistDescription" style="flex:0 0 auto;">MORE</button>
+          <button type="button" class="toggle-link" data-toggle-clamp="albumArtistDescription" style="flex:0 0 auto;" aria-controls="albumArtistDescription" aria-expanded="false">MORE</button>
         </div>
       </section>
       <section class="panel" style="margin-top:16px; max-width:884px;">
@@ -2905,34 +3301,62 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
       <script>
         (function() {{
           const row = document.getElementById('starRatingRow');
-          const stars = row.querySelectorAll('.star-btn');
+          const stars = Array.from(row.querySelectorAll('.star-btn'));
           const label = document.getElementById('starWidgetLabel');
           const status = document.getElementById('starWidgetStatus');
           let current = Number(row.dataset.current) || 0;
+          row.setAttribute('role', 'group');
+          row.setAttribute('aria-label', 'Star rating');
+          function syncTabIndex() {{
+            const focusIdx = current > 0 ? current - 1 : 0;
+            stars.forEach((s, i) => s.setAttribute('tabindex', i === focusIdx ? '0' : '-1'));
+          }}
           function highlight(n) {{
             stars.forEach((s, i) => s.classList.toggle('on', i < n));
             label.textContent = n ? n + '/10' : 'Rate this album';
           }}
           highlight(current);
+          syncTabIndex();
+          async function commitRating(newVal) {{
+            try {{
+              status.textContent = 'Saving\u2026';
+              const payload = await fetchJson('/api/albums/{album.id}/rating', {{
+                method: 'PATCH',
+                body: JSON.stringify({{ rating: newVal }}),
+              }});
+              current = newVal || 0;
+              row.dataset.current = current;
+              highlight(current);
+              syncTabIndex();
+              updateAlbumListenState('{album.id}', payload);
+              status.textContent = '\u2713 Saved';
+              setTimeout(() => {{ status.textContent = ''; }}, 1500);
+            }} catch (err) {{
+              status.textContent = err.message;
+            }}
+          }}
           stars.forEach((star, idx) => {{
             star.addEventListener('mouseenter', () => highlight(idx + 1));
             star.addEventListener('mouseleave', () => highlight(current));
-            star.addEventListener('click', async () => {{
-              const newVal = (idx + 1 === current) ? null : idx + 1;
-              try {{
-                status.textContent = 'Saving\u2026';
-                const payload = await fetchJson('/api/albums/{album.id}/rating', {{
-                  method: 'PATCH',
-                  body: JSON.stringify({{ rating: newVal }}),
-                }});
-                current = newVal || 0;
-                row.dataset.current = current;
-                highlight(current);
-                updateAlbumListenState('{album.id}', payload);
-                status.textContent = '\u2713 Saved';
-                setTimeout(() => {{ status.textContent = ''; }}, 1500);
-              }} catch (err) {{
-                status.textContent = err.message;
+            star.addEventListener('click', () => commitRating(idx + 1 === current ? null : idx + 1));
+            star.addEventListener('keydown', (e) => {{
+              if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {{
+                e.preventDefault();
+                const next = Math.min(idx + 1, stars.length - 1);
+                stars[next].setAttribute('tabindex', '0');
+                stars[idx].setAttribute('tabindex', '-1');
+                stars[next].focus();
+                highlight(next + 1);
+              }} else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {{
+                e.preventDefault();
+                const prev = Math.max(idx - 1, 0);
+                stars[prev].setAttribute('tabindex', '0');
+                stars[idx].setAttribute('tabindex', '-1');
+                stars[prev].focus();
+                highlight(prev + 1);
+              }} else if (e.key === 'Enter' || e.key === ' ') {{
+                e.preventDefault();
+                commitRating(idx + 1 === current ? null : idx + 1);
               }}
             }});
           }});
@@ -2981,6 +3405,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
         function syncAlbumEditToggle() {{
           const isOpen = !albumEditPanel.classList.contains("hidden");
           albumEditToggle.textContent = isOpen ? "Close Editor" : "Edit Album Metadata";
+          albumEditToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
         }}
         albumEditToggle.addEventListener("click", () => {{
           const willOpen = albumEditPanel.classList.contains("hidden");
@@ -3008,6 +3433,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           let abortCtrl = null;
           function setSourcePanelOpen(isOpen) {{
             sourcePanel.classList.toggle('hidden', !isOpen);
+            btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
             if (isOpen) urlInput.focus();
           }}
           function resetRefreshUI() {{
@@ -3258,7 +3684,7 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
     genre_picker_create = _genre_picker_html("createGenrePicker")
     genre_picker_br = _genre_picker_html("brGenrePicker")
     body = f"""
-      <section class="hero">
+      <section class="hero compact">
         <div class="eyebrow">Lists</div>
         <h1>Rank albums into actual tops</h1>
         <p>Create focused lists, add albums from your library, then drag or button them into the order that actually reflects preference.</p>
@@ -3266,14 +3692,14 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
       <section class="panel" style="margin-top:20px;">
         <div class="detail-head">
           <div class="panel-title" style="margin-bottom:0;">Create List</div>
-          {('<button type="button" id="listToolsToggle" class="secondary" title="Toggle create list">Show</button>' if has_lists else '')}
+          {('<button type="button" id="listToolsToggle" class="secondary" title="Toggle create list" aria-controls="listToolsPanel" aria-expanded="false">Show</button>' if has_lists else '')}
         </div>
         <div id="listToolsPanel" class="{('hidden' if has_lists else '')}" style="margin-top:14px;">
-          <div class="row" style="margin-bottom:16px; gap:8px;">
-            <button type="button" class="create-tab secondary active" data-tab="manual">Manual</button>
-            <button type="button" class="create-tab secondary" data-tab="best-rated">&#9733; Best Rated</button>
+          <div class="row" role="tablist" aria-label="Create list mode" style="margin-bottom:16px; gap:8px;">
+            <button type="button" id="create-tab-button-manual" class="create-tab secondary active" data-tab="manual" role="tab" aria-selected="true" aria-controls="create-tab-manual">Manual</button>
+            <button type="button" id="create-tab-button-best-rated" class="create-tab secondary" data-tab="best-rated" role="tab" aria-selected="false" aria-controls="create-tab-best-rated">&#9733; Best Rated</button>
           </div>
-          <div id="create-tab-manual">
+          <div id="create-tab-manual" role="tabpanel" aria-labelledby="create-tab-button-manual">
             <form id="listForm">
               <input name="name" placeholder="List name" required>
               <textarea name="description" placeholder="Description"></textarea>
@@ -3291,7 +3717,7 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
               </div>
             </form>
           </div>
-          <div id="create-tab-best-rated" class="hidden">
+          <div id="create-tab-best-rated" class="hidden" role="tabpanel" aria-labelledby="create-tab-button-best-rated" hidden>
             <div class="row">
               <div class="form-field" style="flex:1;">
                 <label class="form-label">Time period</label>
@@ -3340,7 +3766,9 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
         const listToolsToggle = document.getElementById("listToolsToggle");
         function syncListToolsToggle() {{
           if (!listToolsToggle) return;
-          listToolsToggle.textContent = listToolsPanel.classList.contains("hidden") ? "Show" : "Hide";
+          const isOpen = !listToolsPanel.classList.contains("hidden");
+          listToolsToggle.textContent = isOpen ? "Hide" : "Show";
+          listToolsToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
         }}
         listToolsToggle?.addEventListener("click", () => {{
           listToolsPanel.classList.toggle("hidden");
@@ -3350,10 +3778,18 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
         // ── Create List tabs ─────────────────────────────────────────────────
         document.querySelectorAll(".create-tab").forEach((btn) => {{
           btn.addEventListener("click", () => {{
-            document.querySelectorAll(".create-tab").forEach((b) => b.classList.remove("active"));
+            document.querySelectorAll(".create-tab").forEach((b) => {{
+              b.classList.remove("active");
+              b.setAttribute("aria-selected", "false");
+            }});
             btn.classList.add("active");
-            document.getElementById("create-tab-manual").classList.toggle("hidden", btn.dataset.tab !== "manual");
-            document.getElementById("create-tab-best-rated").classList.toggle("hidden", btn.dataset.tab !== "best-rated");
+            btn.setAttribute("aria-selected", "true");
+            const manualPanel = document.getElementById("create-tab-manual");
+            const bestRatedPanel = document.getElementById("create-tab-best-rated");
+            manualPanel.classList.toggle("hidden", btn.dataset.tab !== "manual");
+            bestRatedPanel.classList.toggle("hidden", btn.dataset.tab !== "best-rated");
+            manualPanel.toggleAttribute("hidden", btn.dataset.tab !== "manual");
+            bestRatedPanel.toggleAttribute("hidden", btn.dataset.tab !== "best-rated");
           }});
         }});
 
@@ -3491,12 +3927,19 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
           }}
         }});
         document.querySelectorAll(".list-head[data-toggle]").forEach((head) => {{
+          function syncListToggle(body) {{
+            const btn = head.querySelector(".list-toggle-btn");
+            if (!btn) return;
+            const isOpen = !body.classList.contains("hidden");
+            btn.innerHTML = isOpen ? "&#9650;" : "&#9660;";
+            btn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+            btn.setAttribute("aria-label", isOpen ? "Hide list items" : "Show list items");
+          }}
           function doToggle() {{
             const body = document.getElementById(head.dataset.toggle);
             if (!body) return;
             body.classList.toggle("hidden");
-            const btn = head.querySelector(".list-toggle-btn");
-            if (btn) btn.innerHTML = body.classList.contains("hidden") ? "&#9660;" : "&#9650;";
+            syncListToggle(body);
           }}
           head.addEventListener("click", (e) => {{
             if (!e.target.closest(".list-toggle-btn")) doToggle();
@@ -3523,7 +3966,11 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
             target.classList.remove("hidden");
             const head = target.closest(".list-block")?.querySelector(".list-head");
             const btn = head?.querySelector(".list-toggle-btn");
-            if (btn) btn.innerHTML = "&#9650;";
+            if (btn) {{
+              btn.innerHTML = "&#9650;";
+              btn.setAttribute("aria-expanded", "true");
+              btn.setAttribute("aria-label", "Hide list items");
+            }}
             target.scrollIntoView({{ behavior: "smooth", block: "start" }});
             history.replaceState(null, "", location.pathname + location.search);
           }}
@@ -3540,7 +3987,11 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
             if (body) {{
               body.classList.remove("hidden");
               const btn = block.querySelector(".list-toggle-btn");
-              if (btn) btn.innerHTML = "&#9650;";
+              if (btn) {{
+                btn.innerHTML = "&#9650;";
+                btn.setAttribute("aria-expanded", "true");
+                btn.setAttribute("aria-label", "Hide list items");
+              }}
               block.scrollIntoView({{ behavior: "smooth", block: "start" }});
             }}
           }}
@@ -3554,7 +4005,11 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
             if (body) {{
               body.classList.remove("hidden");
               const btn = body.closest(".list-block")?.querySelector(".list-toggle-btn");
-              if (btn) btn.innerHTML = "&#9650;";
+              if (btn) {{
+                btn.innerHTML = "&#9650;";
+                btn.setAttribute("aria-expanded", "true");
+                btn.setAttribute("aria-label", "Hide list items");
+              }}
             }}
           }});
         }}
@@ -3603,7 +4058,9 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
             addToggle.addEventListener("click", (e) => {{
               e.stopPropagation();
               addPanel.classList.toggle("hidden");
-              addToggle.textContent = addPanel.classList.contains("hidden") ? "+ Add album" : "\u2715 Cancel";
+              const isOpen = !addPanel.classList.contains("hidden");
+              addToggle.textContent = isOpen ? "\u2715 Cancel" : "+ Add album";
+              addToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
             }});
             const picker = addPanel.querySelector(".list-add-picker");
             const hiddenId = addPanel.querySelector(".list-add-album-id");
@@ -3687,7 +4144,7 @@ def render_settings_page(settings: SettingsRecord) -> str:
         for t_val, t_label, t_desc in _themes
     )
     body = f"""
-      <section class="hero">
+      <section class="hero compact">
         <div class="eyebrow">Settings</div>
         <h1>Keep AI optional and visible</h1>
         <p>Choose the active OpenAI model used for draft generation, and pick a colour theme for the interface.</p>
@@ -3801,7 +4258,7 @@ def render_genres_page(settings: SettingsRecord, genres: list[GenreRecord]) -> s
         for genre in genres
     ) or '<p class="muted">No genres yet.</p>'
     body = f"""
-      <section class="hero">
+      <section class="hero compact">
         <div class="eyebrow">Genres</div>
         <h1>Manage the filter list manually</h1>
         <p>Add only the genres you want to see in the album filter. Album matching uses substring checks, so a filter like Gothic Metal will still match Industrial / Gothic Metal.</p>
@@ -3820,7 +4277,7 @@ def render_genres_page(settings: SettingsRecord, genres: list[GenreRecord]) -> s
               <button type="button" class="secondary" id="genreReset">New</button>
               <span class="status" id="genreStatus"></span>
             </div>
-            <div id="genreDuplicateWarning" class="hidden" style="margin-top:10px; padding:10px 12px; background:rgba(255,200,0,0.1); border:1px solid rgba(255,200,0,0.3); border-radius:6px; font-size:0.88em; color:var(--ink);">
+            <div id="genreDuplicateWarning" class="warning-box hidden">
               A genre named <strong id="genreDuplicateName"></strong> already exists. Saving will keep the existing genre.
             </div>
           </form>
@@ -3916,7 +4373,7 @@ def render_list_detail_page(settings: SettingsRecord, record: AlbumListRecord, a
         else '<p class="muted" style="font-size:13px;">No genres configured. Add some on the Genres page.</p>'
     )
     body = f"""
-      <section class="hero">
+      <section class="hero compact">
         <div class="eyebrow">List</div>
         <h1>{_escape(record.name)}</h1>
         <p>{_escape(record.description or 'Rank albums inside this list and add more entries when needed.')}</p>
@@ -3948,7 +4405,7 @@ def render_list_detail_page(settings: SettingsRecord, record: AlbumListRecord, a
       </section>
       <section class="panel" style="margin-top:20px;">
         <div class="detail-head" style="justify-content:flex-end;">
-          <a class="secondary" href="/lists" style="display:inline-flex; align-items:center; text-decoration:none; border-radius:999px; padding:11px 16px; background:rgba(255,255,255,0.08); color:var(--ink);">Back To Lists</a>
+          <a class="button-link secondary" href="/lists">Back to Lists</a>
         </div>
       </section>
       <section class="grid" style="margin-top:20px;">{items_markup}</section>

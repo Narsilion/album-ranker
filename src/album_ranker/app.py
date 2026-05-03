@@ -165,7 +165,7 @@ def _friendly_ai_error(exc: Exception, *, action: str) -> str:
     return detail or f"{action.capitalize()} failed. Try again."
 
 
-def _error_page(title: str, message: str, back_href: str = "/albums", back_label: str = "Back To Albums") -> str:
+def _error_page(title: str, message: str, back_href: str = "/albums", back_label: str = "Back to Albums") -> str:
     return f"""<!doctype html>
 <html>
   <head>

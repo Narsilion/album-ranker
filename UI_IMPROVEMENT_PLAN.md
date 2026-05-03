@@ -8,51 +8,51 @@ The highest-value work is to fix invalid nested interactive controls in album ca
 
 ## Priority Improvements
 
-1. Fix interactive controls inside album card links.
+1. Fix interactive controls inside album card links. **Implemented 2026-05-03.**
    - Album cards currently render as anchor elements that contain buttons for rating, bookmark, and listened actions.
    - Convert album cards to non-link containers with dedicated links for cover/title, or move action buttons outside the anchor.
    - Preserve current click behavior: opening album details from the cover/title area, while action buttons only perform their own action.
 
-2. Add visible keyboard focus states.
+2. Add visible keyboard focus states. **Implemented 2026-05-03.**
    - Add a shared `:focus-visible` style for links, buttons, inputs, selects, textareas, tabs, letter filters, star buttons, and compact icon buttons.
    - Use a clear accent outline or box shadow that works across all dark themes.
    - Avoid layout shift when focus appears.
 
-3. Improve responsive behavior.
+3. Improve responsive behavior. **Implemented 2026-05-03.**
    - Keep the existing `980px` breakpoint, then add smaller-screen rules for phone widths.
    - Make detail headers, toolbars, filters, alphabet filters, track rows, list rows, and action clusters wrap predictably.
    - Ensure long URLs, long artist names, and long album titles do not squeeze controls or overflow panels.
 
-4. Replace repeated inline styles with reusable classes.
+4. Replace repeated inline styles with reusable classes. **Implemented 2026-05-03.**
    - Introduce shared classes for common layout patterns: panel headers, toolbars, action rows, compact inputs, URL rows, status rows, danger zones, and empty states.
    - Move repeated `style="..."` snippets out of page renderers where practical.
    - Keep the app server-rendered in `ui.py`; do not introduce a frontend framework.
 
-5. Make status messages accessible.
+5. Make status messages accessible. **Implemented 2026-05-03.**
    - Add `role="status"` and `aria-live="polite"` to save/import/refresh/generate status elements.
    - Add a distinct error state style for failed actions.
    - Keep current text feedback, but make success, loading, cancelled, and error states visually consistent.
 
-6. Clarify destructive actions.
+6. Clarify destructive actions. **Implemented 2026-05-03.**
    - Move destructive controls like `Delete Artist`, `Delete Album`, and list/genre deletion into clearer danger areas or visually separated action groups.
    - Keep confirmation dialogs, but make the surrounding UI communicate that deletion is destructive before the dialog appears.
 
-7. Improve touch support for hover-only actions.
+7. Improve touch support for hover-only actions. **Implemented 2026-05-03.**
    - Avoid hiding important actions behind hover-only cover overlays on touch devices.
    - Keep bookmark/listened/rating actions discoverable through always-visible compact buttons or a visible actions row/menu.
 
-8. Tighten operational page headers.
+8. Tighten operational page headers. **Implemented 2026-05-03.**
    - Reduce large hero treatment on dense workflow pages where users repeatedly manage albums, artists, genres, lists, and settings.
    - Prefer compact headers with page title, count, primary action, and short supporting text.
    - Preserve the dark theme and current visual identity.
 
-9. Improve filter UX.
+9. Improve filter UX. **Implemented 2026-05-03.**
    - Show result counts such as `Showing 20 of 143`.
    - Add clear filter/reset controls for album and artist filters.
    - Add explicit empty states when filters return no matches.
    - Widen artist search where practical and keep filter controls usable on mobile.
 
-10. Upgrade collapsible controls and tabs.
+10. Upgrade collapsible controls and tabs. **Implemented 2026-05-03.**
     - Add `aria-expanded` and `aria-controls` to show/hide controls.
     - Use consistent selected state handling for tabs and segmented controls.
     - Keep labels synchronized with state, such as `Show Tools`/`Hide Tools`.

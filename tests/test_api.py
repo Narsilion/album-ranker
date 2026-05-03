@@ -276,8 +276,8 @@ def test_manual_album_create_and_render_pages(client) -> None:
     assert f'href="/artists/{artist_id}"' in artists_page.text
     assert "Album Import" in artist_detail_page.text
     assert ".aa-tab.active" in artist_detail_page.text
-    assert 'class="aa-tab secondary active" data-tab="import" aria-pressed="true"' in artist_detail_page.text
-    assert 'class="aa-tab secondary" data-tab="manual" aria-pressed="false"' in artist_detail_page.text
+    assert 'id="aa-tab-button-import" class="aa-tab secondary active"' in artist_detail_page.text
+    assert 'id="aa-tab-button-manual" class="aa-tab secondary"' in artist_detail_page.text
     assert "Please provide a proper Metal Archives album URL" in artist_detail_page.text
     assert "Use a Metal Archives album page URL from /albums/" in artist_detail_page.text
     assert "Album Import" not in albums_page.text
