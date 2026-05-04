@@ -45,14 +45,17 @@ class FakeImporter(MetadataImporter):
             ],
         )
 
-    def generate_album_overview(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:  # type: ignore[override]
+    def generate_album_writeup(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:  # type: ignore[override]
         lang_tag = "RU" if language == "ru" else "EN"
         return (
             f"🎸 Album: {album.artist_name} — {album.title}\n\n"
             f"📅 Release date: {album.release_year or 'unknown'}\n\n"
             f"🎶 Genre: {album.genre or 'unknown'}\n\n"
-            f"📌 Description:\nTest overview in {lang_tag}."
+            f"📌 Description:\nTest write-up in {lang_tag}."
         )
+
+    def generate_album_overview(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:  # type: ignore[override]
+        return self.generate_album_writeup(album, language=language, model=model)
 
 
 class FakeCoverDownloader(CoverDownloader):

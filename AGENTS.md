@@ -57,6 +57,7 @@ Use this file to avoid re-discovering the project structure on every task.
 - Genre matching on the albums page is substring-based.
 - List item removal should remove the album from the list only, not from the library.
 - Imported album metadata notes should display on separate lines on the album details page.
+- AI is needed only for album write-ups / Telegram post generation, with generated text also shown in Album Ranker as album context. Do not add or preserve AI usage for artist import, album metadata import, metadata refresh, list generation, or other workflows.
 
 ## Test Workflow
 

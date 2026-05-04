@@ -20,7 +20,7 @@ from album_ranker.importer import (
     metal_archives_album_draft_from_url,
     metal_archives_artist_url_from_album_url,
 )
-from album_ranker.openai_client import OpenAIClient
+from album_ranker.openai_client import AlbumWriteupAIClient
 from album_ranker.schemas import (
     AlbumBookmarkPatch,
     AlbumDetailRecord,
@@ -50,6 +50,9 @@ from album_ranker.schemas import (
     SettingsRecord,
     SettingsUpdateRequest,
     TrackUpsert,
+    WriteupDraftRequest,
+    WriteupDraftResponse,
+    WriteupSaveRequest,
 )
 from album_ranker.settings import Settings
 from album_ranker.ui import (
@@ -115,7 +118,8 @@ def _is_alterportal_album_url(url: str | None) -> bool:
 def _validation_message(field: str, message: str) -> str:
     normalized = message.replace("Value error, ", "")
     field_labels = {
-        "active_model": "Model",
+        "active_model": "Write-up model",
+        "writeup_model": "Write-up model",
         "artist_name": "Artist name",
         "album_title": "Album title",
         "title": "Album title",
@@ -126,7 +130,7 @@ def _validation_message(field: str, message: str) -> str:
         "duration_seconds": "Duration",
         "duration": "Duration",
         "track_number": "Track number",
-        "language": "Overview language",
+        "language": "Write-up language",
         "limit": "List size",
     }
     label = field_labels.get(field, field.replace("_", " ").title())
@@ -141,7 +145,7 @@ def _validation_message(field: str, message: str) -> str:
     if "less than or equal to 500" in normalized and "limit" in field:
         return "List size must be between 1 and 500."
     if "Input should be 'en' or 'ru'" in normalized:
-        return "Overview language must be English or Russian."
+        return "Write-up language must be English or Russian."
     return f"{label}: {normalized}"
 
 
@@ -165,7 +169,7 @@ def _friendly_ai_error(exc: Exception, *, action: str) -> str:
     return detail or f"{action.capitalize()} failed. Try again."
 
 
-def _error_page(title: str, message: str, back_href: str = "/albums", back_label: str = "Back to Albums") -> str:
+def _error_page(title: str, message: str, back_href: str = "/albums", back_label: str = "Back To Albums") -> str:
     return f"""<!doctype html>
 <html>
   <head>
@@ -217,12 +221,8 @@ def create_app(
     db = Database(settings.db_path)
     db.initialize()
     db.set_app_setting("active_model", db.get_active_model(settings.model))
-    importer = importer or MetadataImporter(OpenAIClient(settings.openai_api_key) if settings.openai_api_key else None)
+    importer = importer or MetadataImporter(AlbumWriteupAIClient(settings.openai_api_key) if settings.openai_api_key else None)
     cover_downloader = cover_downloader or CoverDownloader(settings.cover_dir)
-    ai_state = {
-        "status": "ready" if settings.openai_api_key else "key_missing",
-        "detail": None if settings.openai_api_key else "OPENAI_API_KEY is not configured.",
-    }
 
     app = FastAPI(title="Album Ranker")
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -249,15 +249,23 @@ def create_app(
             )
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
+    def writeup_generation_status() -> tuple[str, str | None]:
+        if not settings.openai_api_key:
+            return "key_missing", "OPENAI_API_KEY is not configured."
+        if importer.last_request_failed:
+            return "last_request_failed", importer.last_error
+        return "ready", None
+
     def build_settings() -> SettingsRecord:
+        writeup_status, writeup_status_detail = writeup_generation_status()
         return db.build_settings_record(
             default_model=settings.model,
             available_models=available_models,
             host=settings.host,
             port=settings.port,
             openai_api_key_configured=bool(settings.openai_api_key),
-            ai_status=ai_state["status"],
-            ai_status_detail=ai_state["detail"],
+            ai_status=writeup_status,
+            ai_status_detail=writeup_status_detail,
             last_import_diagnostics=importer.last_diagnostics or None,
         )
 
@@ -329,7 +337,8 @@ def create_app(
 
     @app.put("/api/settings", response_model=SettingsRecord)
     async def update_settings(payload: SettingsUpdateRequest) -> SettingsRecord:
-        if payload.active_model not in available_models:
+        selected_model = payload.selected_model
+        if selected_model not in available_models:
             raise HTTPException(status_code=400, detail="That model is not in the available model list. Pick one from the menu.")
         try:
             db.update_settings(payload)
@@ -404,10 +413,7 @@ def create_app(
         try:
             draft_data = importer.create_artist_draft(request, model=db.get_active_model(settings.model))
         except Exception as exc:
-            detail = _friendly_ai_error(exc, action="metadata")
-            if settings.openai_api_key:
-                ai_state["status"] = "last_request_failed"
-                ai_state["detail"] = detail
+            detail = f"Source metadata refresh failed: {exc}"
             raise HTTPException(status_code=502, detail=detail) from exc
         upsert = ArtistUpsert(
             name=draft_data.artist_name or existing.name,
@@ -500,10 +506,7 @@ def create_app(
         try:
             draft_data = importer.create_album_draft(request, model=db.get_active_model(settings.model))
         except Exception as exc:
-            detail = _friendly_ai_error(exc, action="metadata")
-            if settings.openai_api_key:
-                ai_state["status"] = "last_request_failed"
-                ai_state["detail"] = detail
+            detail = f"Source metadata refresh failed: {exc}"
             raise HTTPException(status_code=502, detail=detail) from exc
         tracks = [
             TrackUpsert(track_number=t.track_number, title=t.title, duration_seconds=t.duration_seconds)
@@ -540,28 +543,36 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"ok": True}
 
-    @app.post("/api/albums/{album_id}/overview/draft", response_model=OverviewDraftResponse)
-    async def generate_album_overview(album_id: int, payload: OverviewDraftRequest) -> OverviewDraftResponse:
+    def _generate_album_writeup(album_id: int, language: str) -> str:
         try:
             album = db.get_album(album_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         try:
-            overview = importer.generate_album_overview(
+            writeup = importer.generate_album_writeup(
                 album,
-                language=payload.language,
+                language=language,
                 model=db.get_active_model(settings.model),
             )
         except Exception as exc:
-            detail = _friendly_ai_error(exc, action="overview")
-            if settings.openai_api_key:
-                ai_state["status"] = "last_request_failed"
-                ai_state["detail"] = detail
+            detail = _friendly_ai_error(exc, action="write-up")
             raise HTTPException(status_code=502, detail=detail) from exc
-        if settings.openai_api_key:
-            ai_state["status"] = "ready"
-            ai_state["detail"] = None
-        return OverviewDraftResponse(overview=overview)
+        return writeup
+
+    @app.post("/api/albums/{album_id}/write-up/draft", response_model=WriteupDraftResponse)
+    async def generate_album_writeup(album_id: int, payload: WriteupDraftRequest) -> WriteupDraftResponse:
+        return WriteupDraftResponse(writeup=_generate_album_writeup(album_id, payload.language))
+
+    @app.post("/api/albums/{album_id}/overview/draft", response_model=OverviewDraftResponse)
+    async def generate_album_overview(album_id: int, payload: OverviewDraftRequest) -> OverviewDraftResponse:
+        return OverviewDraftResponse(overview=_generate_album_writeup(album_id, payload.language))
+
+    @app.patch("/api/albums/{album_id}/write-up", response_model=AlbumDetailRecord)
+    async def save_album_writeup(album_id: int, payload: WriteupSaveRequest) -> AlbumDetailRecord:
+        try:
+            return db.update_album_writeup(album_id, payload.writeup)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.patch("/api/albums/{album_id}/overview", response_model=AlbumDetailRecord)
     async def save_album_overview(album_id: int, payload: OverviewSaveRequest) -> AlbumDetailRecord:
@@ -630,18 +641,8 @@ def create_app(
         try:
             draft_data = importer.create_artist_draft(payload, model=db.get_active_model(settings.model))
         except Exception as exc:
-            detail = _friendly_ai_error(exc, action="metadata")
-            if settings.openai_api_key:
-                ai_state["status"] = "last_request_failed"
-                ai_state["detail"] = detail
+            detail = f"Source import failed: {exc}"
             raise HTTPException(status_code=502, detail=detail) from exc
-        if settings.openai_api_key:
-            if importer.last_request_failed:
-                ai_state["status"] = "last_request_failed"
-                ai_state["detail"] = _friendly_ai_error(Exception(importer.last_error or ""), action="metadata")
-            else:
-                ai_state["status"] = "ready"
-                ai_state["detail"] = None
         draft = db.create_import_job("artist", payload, draft_to_json(draft_data))
         return ImportDraftResponse(draft=draft)
 
@@ -651,18 +652,8 @@ def create_app(
         try:
             draft_data = importer.create_album_draft(payload, model=db.get_active_model(settings.model))
         except Exception as exc:
-            detail = _friendly_ai_error(exc, action="metadata")
-            if settings.openai_api_key:
-                ai_state["status"] = "last_request_failed"
-                ai_state["detail"] = detail
+            detail = f"Source import failed: {exc}"
             raise HTTPException(status_code=502, detail=detail) from exc
-        if settings.openai_api_key:
-            if importer.last_request_failed:
-                ai_state["status"] = "last_request_failed"
-                ai_state["detail"] = _friendly_ai_error(Exception(importer.last_error or ""), action="metadata")
-            else:
-                ai_state["status"] = "ready"
-                ai_state["detail"] = None
         draft = db.create_import_job("album", payload, draft_to_json(draft_data))
         return ImportDraftResponse(draft=draft)
 
@@ -674,10 +665,7 @@ def create_app(
         try:
             album_data = importer.create_album_draft(payload, model=db.get_active_model(settings.model))
         except Exception as exc:
-            detail = _friendly_ai_error(exc, action="metadata")
-            if settings.openai_api_key:
-                ai_state["status"] = "last_request_failed"
-                ai_state["detail"] = detail
+            detail = f"Source import failed: {exc}"
             raise HTTPException(status_code=502, detail=detail) from exc
         deterministic_album_data = metal_archives_album_draft_from_url(
             ImportRequest(
@@ -727,10 +715,7 @@ def create_app(
             try:
                 artist_data = importer.create_artist_draft(artist_request, model=db.get_active_model(settings.model))
             except Exception as exc:
-                detail = _friendly_ai_error(exc, action="metadata")
-                if settings.openai_api_key:
-                    ai_state["status"] = "last_request_failed"
-                    ai_state["detail"] = detail
+                detail = f"Source import failed: {exc}"
                 raise HTTPException(status_code=502, detail=detail) from exc
             artist_payload = draft_to_json(artist_data)
             if artist_data.genre and not album_data.genre:
@@ -742,13 +727,6 @@ def create_app(
                     status=album_draft.status,
                 )
             artist_draft = db.create_import_job("artist", artist_request, artist_payload)
-        if settings.openai_api_key:
-            if importer.last_request_failed:
-                ai_state["status"] = "last_request_failed"
-                ai_state["detail"] = _friendly_ai_error(Exception(importer.last_error or ""), action="metadata")
-            else:
-                ai_state["status"] = "ready"
-                ai_state["detail"] = None
         return AlbumWithArtistImportResponse(
             album_draft=album_draft,
             artist_draft=artist_draft,
@@ -863,12 +841,4 @@ def create_app(
 
 
 def _all_drafts(db: Database) -> list:
-    drafts = []
-    draft_id = 1
-    while True:
-        try:
-            drafts.append(db.get_import_job(draft_id))
-            draft_id += 1
-        except KeyError:
-            break
-    return drafts
+    return db.list_import_jobs()

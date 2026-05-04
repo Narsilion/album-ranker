@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 from fastapi.testclient import TestClient
 
@@ -208,8 +209,11 @@ class SparseAlbumImporter(MetadataImporter):
             genre="Gothic Metal/Rock",
         )
 
-    def generate_album_overview(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:  # type: ignore[override]
+    def generate_album_writeup(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:  # type: ignore[override]
         return ""
+
+    def generate_album_overview(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:  # type: ignore[override]
+        return self.generate_album_writeup(album, language=language, model=model)
 
 
 def test_manual_album_create_and_render_pages(client) -> None:
@@ -363,6 +367,243 @@ def test_artist_page_album_import_rejects_metal_archives_artist_url(client) -> N
     assert response.status_code == 400
     assert "Metal Archives album URL" in response.text
     assert "/albums/" in response.text
+
+
+def test_import_routes_do_not_call_ai_for_metadata(settings, monkeypatch) -> None:
+    import album_ranker.importer as importer_module
+
+    album_html = """
+    <html>
+      <head><title>Band - Parsed Album - Encyclopaedia Metallum: The Metal Archives</title></head>
+      <body>
+        <div id="album_info">
+          <h1 class="album_name"><a href="https://www.metal-archives.com/albums/Band/Parsed_Album/1">Parsed Album</a></h1>
+          <h2 class="band_name"><a href="https://www.metal-archives.com/bands/Band/1">Band</a></h2>
+          <dl class="float_left"><dt>Type:</dt><dd>Full-length</dd><dt>Release date:</dt><dd>May 1st, 2026</dd></dl>
+        </div>
+        <table class="display table_lyrics">
+          <tr class="even"><td width="20">1.</td><td class="wrapWords">Parsed Track</td><td align="right">03:00</td><td></td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    artist_html = """
+    <html>
+      <head><title>Band - Encyclopaedia Metallum: The Metal Archives</title></head>
+      <body>
+        <h1 class="band_name"><a href="https://www.metal-archives.com/bands/Band/1">Band</a></h1>
+        <dl><dt>Genre:</dt><dd>Progressive Metal</dd></dl>
+      </body>
+    </html>
+    """
+
+    def fake_fetch(url: str) -> tuple[str, str]:
+        if "/bands/" in url:
+            return artist_html, "text/html"
+        return album_html, "text/html"
+
+    monkeypatch.setattr(importer_module, "_fetch_url_document", fake_fetch)
+
+    class ExplodingAIClient:
+        def generate_json(self, **kwargs):
+            raise AssertionError("AI client should not be used for metadata import")
+
+    app = create_app(
+        settings,
+        importer=MetadataImporter(ExplodingAIClient()),
+        cover_downloader=CoverDownloader(settings.cover_dir),
+    )
+    local_client = TestClient(app)
+
+    response = local_client.post(
+        "/api/import/album",
+        json={
+            "artist_name": "Band",
+            "album_title": None,
+            "source_url": "https://www.metal-archives.com/albums/Band/Parsed_Album/1",
+        },
+    )
+
+    assert response.status_code == 200
+    draft = response.json()["draft"]["draft_payload"]
+    assert draft["artist_name"] == "Band"
+    assert draft["album_title"] == "Parsed Album"
+    assert draft["release_year"] == 2026
+    assert draft["tracks"][0]["title"] == "Parsed Track"
+
+    artist_response = local_client.post(
+        "/api/import/artist",
+        json={
+            "artist_name": "Band",
+            "source_url": "https://www.metal-archives.com/bands/Band/1",
+        },
+    )
+    assert artist_response.status_code == 200
+    artist_draft = artist_response.json()["draft"]["draft_payload"]
+    assert artist_draft["artist_name"] == "Band"
+    assert artist_draft["genre"] == "Progressive Metal"
+
+    bundle_response = local_client.post(
+        "/api/import/album-with-artist",
+        json={
+            "artist_name": "",
+            "album_title": None,
+            "source_url": "https://www.metal-archives.com/albums/Band/Parsed_Album/1",
+        },
+    )
+    assert bundle_response.status_code == 200
+    bundle = bundle_response.json()
+    assert bundle["album_draft"]["draft_payload"]["album_title"] == "Parsed Album"
+    assert bundle["artist_draft"]["draft_payload"]["artist_name"] == "Band"
+
+
+def test_refresh_routes_do_not_call_ai_for_metadata(settings, monkeypatch) -> None:
+    import album_ranker.importer as importer_module
+
+    album_html = """
+    <html>
+      <head><title>Band - Refreshed Album - Encyclopaedia Metallum: The Metal Archives</title></head>
+      <body>
+        <div id="album_info">
+          <h1 class="album_name"><a href="https://www.metal-archives.com/albums/Band/Refreshed_Album/2">Refreshed Album</a></h1>
+          <h2 class="band_name"><a href="https://www.metal-archives.com/bands/Band/1">Band</a></h2>
+          <dl class="float_left"><dt>Type:</dt><dd>EP</dd><dt>Release date:</dt><dd>June 2nd, 2026</dd></dl>
+        </div>
+      </body>
+    </html>
+    """
+    artist_html = """
+    <html>
+      <head><title>Band - Encyclopaedia Metallum: The Metal Archives</title></head>
+      <body>
+        <h1 class="band_name"><a href="https://www.metal-archives.com/bands/Band/1">Band</a></h1>
+        <dl><dt>Genre:</dt><dd>Progressive Metal</dd></dl>
+      </body>
+    </html>
+    """
+
+    def fake_fetch(url: str) -> tuple[str, str]:
+        if "/bands/" in url:
+            return artist_html, "text/html"
+        return album_html, "text/html"
+
+    monkeypatch.setattr(importer_module, "_fetch_url_document", fake_fetch)
+
+    class ExplodingAIClient:
+        def generate_json(self, **kwargs):
+            raise AssertionError("AI client should not be used for metadata refresh")
+
+    app = create_app(
+        settings,
+        importer=MetadataImporter(ExplodingAIClient()),
+        cover_downloader=CoverDownloader(settings.cover_dir),
+    )
+    local_client = TestClient(app)
+    album = local_client.post(
+        "/api/albums",
+        json={
+            "artist_name": "Band",
+            "title": "Original Album",
+            "release_year": 2025,
+            "genre": "Metal",
+            "duration_seconds": 1800,
+            "album_external_url": "https://www.metal-archives.com/albums/Band/Refreshed_Album/2",
+            "cover_image_path": None,
+            "cover_source_url": None,
+            "notes": None,
+            "tracks": [],
+        },
+    ).json()
+    artist_id = album["artist_id"]
+    album_id = album["id"]
+
+    artist_response = local_client.post(
+        f"/api/artists/{artist_id}/refresh",
+        json={"source_url": "https://www.metal-archives.com/bands/Band/1"},
+    )
+    assert artist_response.status_code == 200
+    assert artist_response.json()["name"] == "Band"
+
+    album_response = local_client.post(
+        f"/api/albums/{album_id}/refresh",
+        json={"source_url": "https://www.metal-archives.com/albums/Band/Refreshed_Album/2"},
+    )
+    assert album_response.status_code == 200
+    assert album_response.json()["title"] == "Refreshed Album"
+    assert album_response.json()["release_year"] == 2026
+
+
+def test_writeup_draft_calls_ai_generator(settings) -> None:
+    class CountingAIClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate_json(self, **kwargs):
+            self.calls += 1
+            return {"overview": "Generated write-up for Green Carnation."}
+
+    ai_client = CountingAIClient()
+    app = create_app(
+        settings,
+        importer=MetadataImporter(ai_client),  # type: ignore[arg-type]
+        cover_downloader=CoverDownloader(settings.cover_dir),
+    )
+    local_client = TestClient(app)
+    album = local_client.post(
+        "/api/albums",
+        json={
+            "artist_name": "Green Carnation",
+            "title": "A Dark Poem",
+            "release_year": 2026,
+            "genre": "Progressive Metal",
+            "duration_seconds": 2200,
+            "cover_image_path": None,
+            "cover_source_url": None,
+            "notes": None,
+            "tracks": [],
+        },
+    ).json()
+
+    response = local_client.post(f"/api/albums/{album['id']}/write-up/draft", json={"language": "en"})
+
+    assert response.status_code == 200
+    assert response.json()["writeup"] == "Generated write-up for Green Carnation."
+    assert ai_client.calls == 1
+
+
+def test_writeup_generation_status_is_derived_from_importer_state(settings) -> None:
+    class FailingAIClient:
+        def generate_json(self, **kwargs):
+            raise RuntimeError("boom")
+
+    app = create_app(
+        replace(settings, openai_api_key="test-key"),
+        importer=MetadataImporter(FailingAIClient()),  # type: ignore[arg-type]
+        cover_downloader=CoverDownloader(settings.cover_dir),
+    )
+    local_client = TestClient(app)
+    album = local_client.post(
+        "/api/albums",
+        json={
+            "artist_name": "Green Carnation",
+            "title": "A Dark Poem",
+            "release_year": 2026,
+            "genre": "Progressive Metal",
+            "duration_seconds": 2200,
+            "cover_image_path": None,
+            "cover_source_url": None,
+            "notes": None,
+            "tracks": [],
+        },
+    ).json()
+
+    failed = local_client.post(f"/api/albums/{album['id']}/write-up/draft", json={"language": "en"})
+    settings_response = local_client.get("/api/settings")
+
+    assert failed.status_code == 502
+    assert settings_response.status_code == 200
+    assert settings_response.json()["ai_status"] == "last_request_failed"
+    assert "boom" in settings_response.json()["ai_status_detail"]
 
 
 def test_import_confirm_uses_edited_payload_and_downloads_cover(client) -> None:
@@ -557,14 +798,23 @@ def test_list_item_can_be_removed_and_positions_are_compacted(client) -> None:
     assert items[0]["rank_position"] == 1
 
 
-def test_settings_page_updates_active_model(client) -> None:
-    settings_response = client.put("/api/settings", json={"active_model": "gpt-5.4-mini"})
+def test_settings_page_updates_writeup_model(client) -> None:
+    settings_response = client.put("/api/settings", json={"writeup_model": "gpt-5.4-mini"})
     settings_page = client.get("/settings")
 
     assert settings_response.status_code == 200
     assert settings_response.json()["active_model"] == "gpt-5.4-mini"
+    assert settings_response.json()["writeup_model"] == "gpt-5.4-mini"
     assert settings_page.status_code == 200
+    assert "Write-up Model" in settings_page.text
     assert "gpt-5.4-mini" in settings_page.text
+
+
+def test_settings_update_accepts_active_model_for_compatibility(client) -> None:
+    settings_response = client.put("/api/settings", json={"active_model": "gpt-5.4-mini"})
+
+    assert settings_response.status_code == 200
+    assert settings_response.json()["writeup_model"] == "gpt-5.4-mini"
 
 
 def test_patch_album_rating(client) -> None:
@@ -1090,7 +1340,7 @@ def test_empty_best_rated_auto_list_explains_missing_matches(client) -> None:
 
 
 def test_invalid_settings_model_returns_clear_message(client) -> None:
-    response = client.put("/api/settings", json={"active_model": "not-a-real-model"})
+    response = client.put("/api/settings", json={"writeup_model": "not-a-real-model"})
 
     assert response.status_code == 400
     assert response.json()["detail"] == "That model is not in the available model list. Pick one from the menu."
@@ -1585,7 +1835,7 @@ def test_artist_refresh_via_import_draft_then_put(client) -> None:
     assert updated.json()["name"] == draft_payload["artist_name"]
 
 
-def test_generate_overview_returns_draft_text(client) -> None:
+def test_generate_writeup_returns_draft_text(client) -> None:
     album = client.post(
         "/api/albums",
         json={
@@ -1603,17 +1853,43 @@ def test_generate_overview_returns_draft_text(client) -> None:
     album_id = album["id"]
 
     resp = client.post(
-        f"/api/albums/{album_id}/overview/draft",
+        f"/api/albums/{album_id}/write-up/draft",
         json={"language": "en"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert "overview" in data
-    assert len(data["overview"]) > 0
-    assert "Green Carnation" in data["overview"]
+    assert "writeup" in data
+    assert len(data["writeup"]) > 0
+    assert "Green Carnation" in data["writeup"]
 
 
-def test_generate_overview_invalid_language(client) -> None:
+def test_overview_routes_remain_as_writeup_compatibility(client) -> None:
+    album = client.post(
+        "/api/albums",
+        json={
+            "artist_name": "Green Carnation",
+            "title": "Compatibility",
+            "release_year": 2026,
+            "genre": "Progressive Metal",
+            "duration_seconds": 2200,
+            "cover_image_path": None,
+            "cover_source_url": None,
+            "notes": None,
+            "tracks": [],
+        },
+    ).json()
+    album_id = album["id"]
+
+    draft_resp = client.post(f"/api/albums/{album_id}/overview/draft", json={"language": "en"})
+    assert draft_resp.status_code == 200
+    assert "overview" in draft_resp.json()
+
+    patch_resp = client.patch(f"/api/albums/{album_id}/overview", json={"overview": "Compatibility text."})
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["overview"] == "Compatibility text."
+
+
+def test_generate_writeup_invalid_language(client) -> None:
     album = client.post(
         "/api/albums",
         json={
@@ -1631,13 +1907,13 @@ def test_generate_overview_invalid_language(client) -> None:
     album_id = album["id"]
 
     resp = client.post(
-        f"/api/albums/{album_id}/overview/draft",
+        f"/api/albums/{album_id}/write-up/draft",
         json={"language": "fr"},
     )
     assert resp.status_code == 422
 
 
-def test_save_overview_persists_and_renders(client) -> None:
+def test_save_writeup_persists_and_renders(client) -> None:
     album = client.post(
         "/api/albums",
         json={
@@ -1654,21 +1930,22 @@ def test_save_overview_persists_and_renders(client) -> None:
     ).json()
     album_id = album["id"]
 
-    overview_text = "🎸 Album: Opeth — Blackwater Park\n\n📌 Description:\nA landmark album."
+    writeup_text = "🎸 Album: Opeth — Blackwater Park\n\n📌 Description:\nA landmark album."
     patch_resp = client.patch(
-        f"/api/albums/{album_id}/overview",
-        json={"overview": overview_text},
+        f"/api/albums/{album_id}/write-up",
+        json={"writeup": writeup_text},
     )
     assert patch_resp.status_code == 200
-    assert patch_resp.json()["overview"] == overview_text
+    assert patch_resp.json()["overview"] == writeup_text
 
     page = client.get(f"/albums/{album_id}")
     assert page.status_code == 200
     assert "Blackwater Park" in page.text
     assert "A landmark album." in page.text
+    assert "Album Write-up / Telegram Post" in page.text
 
 
-def test_save_overview_null_clears_it(client) -> None:
+def test_save_writeup_null_clears_it(client) -> None:
     album = client.post(
         "/api/albums",
         json={
@@ -1685,22 +1962,22 @@ def test_save_overview_null_clears_it(client) -> None:
     ).json()
     album_id = album["id"]
 
-    # Save an overview first
-    client.patch(f"/api/albums/{album_id}/overview", json={"overview": "Some overview text."})
+    # Save a write-up first
+    client.patch(f"/api/albums/{album_id}/write-up", json={"writeup": "Some write-up text."})
 
     # Now clear it
-    patch_resp = client.patch(f"/api/albums/{album_id}/overview", json={"overview": None})
+    patch_resp = client.patch(f"/api/albums/{album_id}/write-up", json={"writeup": None})
     assert patch_resp.status_code == 200
     assert patch_resp.json()["overview"] is None
 
     page = client.get(f"/albums/{album_id}")
     assert page.status_code == 200
-    assert "Some overview text." not in page.text
+    assert "Some write-up text." not in page.text
 
 
-def test_generate_overview_missing_album(client) -> None:
+def test_generate_writeup_missing_album(client) -> None:
     resp = client.post(
-        "/api/albums/99999/overview/draft",
+        "/api/albums/99999/write-up/draft",
         json={"language": "en"},
     )
     assert resp.status_code == 404

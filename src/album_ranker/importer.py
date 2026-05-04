@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import re
+import socket
 import subprocess
 from html import unescape as _html_unescape
 from pathlib import Path
@@ -10,7 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
-from album_ranker.openai_client import OpenAIClient, OpenAIClientError
+from album_ranker.openai_client import AlbumWriteupAIClient, OpenAIClientError
 from album_ranker.schemas import AlbumDetailRecord, AlbumDraftData, ArtistDraftData, ImportRequest, display_to_seconds
 
 DEFAULT_HEADERS = {
@@ -21,6 +23,65 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
+SOURCE_FETCH_TIMEOUT_SECONDS = 15
+MAX_SOURCE_BYTES = 2_000_000
+PAGE_METADATA_CHARS = 40_000
+ALLOWED_SOURCE_CONTENT_TYPES = (
+    "text/html",
+    "application/xhtml+xml",
+    "application/xml",
+    "text/xml",
+    "text/plain",
+)
+
+
+def _validate_source_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("Only http and https source URLs are allowed.")
+    if not parsed.hostname:
+        raise ValueError("Source URL must include a host.")
+
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(parsed.hostname, parsed.port, type=socket.SOCK_STREAM)}
+    except OSError as exc:
+        raise ValueError(f"Could not resolve source URL host: {parsed.hostname}") from exc
+
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_unspecified
+            or ip.is_reserved
+        ):
+            raise ValueError("Source URL resolves to a private or local network address.")
+
+
+def _is_allowed_source_content_type(content_type: str) -> bool:
+    if not content_type:
+        return True
+    normalized = content_type.split(";", 1)[0].strip().lower()
+    return any(normalized == allowed for allowed in ALLOWED_SOURCE_CONTENT_TYPES)
+
+
+def _curl_source_args(url: str, *, user_agent: str | None = None) -> list[str]:
+    return [
+        "curl",
+        "-L",
+        "-sS",
+        "--proto",
+        "=http,https",
+        "--max-time",
+        str(SOURCE_FETCH_TIMEOUT_SECONDS),
+        "--max-filesize",
+        str(MAX_SOURCE_BYTES),
+        "-A",
+        user_agent or DEFAULT_HEADERS["User-Agent"],
+        url,
+    ]
 
 
 def _strip_html(html: str) -> str:
@@ -33,42 +94,39 @@ def _strip_html(html: str) -> str:
 
 def _fetch_with_urllib(url: str) -> tuple[str, str]:
     request = Request(url, headers=DEFAULT_HEADERS)
-    with urlopen(request, timeout=30) as response:
+    with urlopen(request, timeout=SOURCE_FETCH_TIMEOUT_SECONDS) as response:
         content_type = response.headers.get("Content-Type", "")
-        raw = response.read(100000).decode("utf-8", errors="ignore")
+        if not _is_allowed_source_content_type(content_type):
+            raise ValueError(f"Unsupported content type: {content_type}")
+        raw_bytes = response.read(MAX_SOURCE_BYTES + 1)
+        if len(raw_bytes) > MAX_SOURCE_BYTES:
+            raise ValueError(f"Source response exceeds {MAX_SOURCE_BYTES} bytes.")
+        raw = raw_bytes.decode("utf-8", errors="ignore")
     return raw, content_type
 
 
 def _fetch_with_curl(url: str) -> tuple[str, str]:
     result = subprocess.run(
-        [
-            "curl",
-            "-L",
-            "-sS",
-            "-A",
-            DEFAULT_HEADERS["User-Agent"],
-            "--max-time",
-            "30",
-            url,
-        ],
+        _curl_source_args(url),
         capture_output=True,
         text=True,
         check=True,
     )
-    return result.stdout[:40000], "text/html"
+    return result.stdout[:PAGE_METADATA_CHARS], "text/html"
 
 
 def _fetch_with_curl_ua(url: str, user_agent: str) -> tuple[str, str]:
     result = subprocess.run(
-        ["curl", "-L", "-sS", "-A", user_agent, "--max-time", "30", url],
+        _curl_source_args(url, user_agent=user_agent),
         capture_output=True,
         text=True,
         check=True,
     )
-    return result.stdout[:40000], "text/html"
+    return result.stdout[:PAGE_METADATA_CHARS], "text/html"
 
 
 def _fetch_url_document(url: str) -> tuple[str, str]:
+    _validate_source_url(url)
     # Facebook blocks generic crawlers but serves OG metadata to its own externalhit UA
     if "facebook.com/" in url:
         return _fetch_with_curl_ua(url, "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)")
@@ -240,7 +298,16 @@ def metal_archives_album_draft_from_url(request: ImportRequest) -> AlbumDraftDat
     if "metal-archives.com" not in str(metadata.get("source_label") or _host_label(request.source_url) or ""):
         return None
     if not html:
-        return None
+        url_artist_name, url_album_title = _metal_archives_album_url_names(request.source_url)
+        artist_name = request.artist_name or url_artist_name
+        album_title = request.album_title or url_album_title
+        if not artist_name and not album_title:
+            return None
+        return AlbumDraftData(
+            artist_name=artist_name or "",
+            album_external_url=request.source_url,
+            album_title=album_title or "",
+        )
     return _best_effort_album_draft(request, metadata=metadata)
 
 
@@ -541,20 +608,23 @@ def _fetch_ytm_full_page(url: str) -> str:
     Uses ``Accept-Language: en-US`` so that text fields (subtitle, title) come
     back in English rather than the browser's locale.
     """
+    _validate_source_url(url)
     try:
         result = subprocess.run(
             [
                 "curl", "-L", "-sS",
+                "--proto", "=http,https",
                 "-A", DEFAULT_HEADERS["User-Agent"],
                 "-H", "Accept-Language: en-US,en;q=0.9",
-                "--max-time", "30",
+                "--max-time", str(SOURCE_FETCH_TIMEOUT_SECONDS),
+                "--max-filesize", str(MAX_SOURCE_BYTES),
                 url,
             ],
             capture_output=True,
             text=True,
             check=True,
         )
-        return result.stdout
+        return result.stdout[:MAX_SOURCE_BYTES]
     except Exception:
         return ""
 
@@ -611,14 +681,15 @@ def _extract_ytm_year(raw: str) -> int | None:
 def _fetch_yt_playlist_raw(playlist_id: str) -> str:
     """Return the full HTML of a YouTube playlist page without size truncation."""
     url = f"https://www.youtube.com/playlist?list={playlist_id}"
+    _validate_source_url(url)
     try:
         result = subprocess.run(
-            ["curl", "-L", "-sS", "-A", DEFAULT_HEADERS["User-Agent"], "--max-time", "30", url],
+            _curl_source_args(url),
             capture_output=True,
             text=True,
             check=True,
         )
-        return result.stdout
+        return result.stdout[:MAX_SOURCE_BYTES]
     except Exception:
         return ""
 
@@ -1123,9 +1194,8 @@ def _merge_album_drafts(ai_data: dict[str, Any], fallback: AlbumDraftData, reque
     return AlbumDraftData.model_validate(merged)
 
 
-class MetadataImporter:
-    def __init__(self, client: OpenAIClient | None) -> None:
-        self.client = client
+class SourceMetadataImporter:
+    def __init__(self) -> None:
         self.last_request_failed = False
         self.last_error: str | None = None
         self.last_diagnostics: dict[str, Any] = {}
@@ -1144,93 +1214,19 @@ class MetadataImporter:
     def create_artist_draft(self, request: ImportRequest, *, model: str) -> ArtistDraftData:
         source_metadata = _page_metadata(request.source_url)
         context = self._build_context(request.source_url, metadata=source_metadata)
-        if self.client is None:
-            draft = _best_effort_artist_draft(request)
-            self._set_diagnostics(
-                {
-                    "target": "artist",
-                    "mode": "fallback_only",
-                    "reason": "OPENAI_API_KEY missing or AI client unavailable",
-                    "request": request.model_dump(mode="json"),
-                    "source_context": {
-                        "url": request.source_url,
-                        "metadata": self._diagnostic_metadata(source_metadata),
-                        "context_excerpt": context,
-                    },
-                    "result": draft.model_dump(mode="json"),
-                }
-            )
-            return draft
-        schema = {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "artist_name": {"type": "string"},
-                "description": {"type": ["string", "null"]},
-                "external_url": {"type": ["string", "null"]},
-                "origin": {"type": ["string", "null"]},
-                "genre": {"type": ["string", "null"]},
-            },
-            "required": [
-                "artist_name",
-                "description",
-                "external_url",
-                "origin",
-                "genre",
-            ],
-        }
-        prompt = (
-            f"Create a concise artist metadata draft for '{request.artist_name or 'the artist on the source page'}'. "
-            "Prefer factual content. If data is uncertain, return null rather than inventing it. "
-            "For 'origin', provide the country first, then city or region if known, e.g. 'UK, London' or 'USA, Nashville'. "
-            "For 'genre', return the artist's primary genre exactly as the source gives it when available. "
-            f"Preferred source URL: {request.source_url or 'none provided'}.\n\n"
-            f"Reference context:\n{context}"
-        )
-        try:
-            data = self.client.generate_json(
-                model=model,
-                system_prompt="You extract clean artist metadata for a local music catalog.",
-                user_prompt=prompt,
-                schema_name="artist_draft",
-                schema=schema,
-            )
-        except OpenAIClientError as exc:
-            self._mark_failure("AI request failed; using page metadata fallback.")
-            draft = _best_effort_artist_draft(request)
-            self._set_diagnostics(
-                {
-                    "target": "artist",
-                    "mode": "ai_failed_fallback",
-                    "reason": str(exc),
-                    "request": request.model_dump(mode="json"),
-                    "source_context": {
-                        "url": request.source_url,
-                        "metadata": self._diagnostic_metadata(source_metadata),
-                        "context_excerpt": context,
-                    },
-                    "result": draft.model_dump(mode="json"),
-                }
-            )
-            return draft
+        draft = _best_effort_artist_draft(request)
         self._mark_success()
-        if not data.get("artist_name"):
-            data["artist_name"] = _best_effort_artist_draft(request).artist_name
-        fallback = _best_effort_artist_draft(request)
-        data["genre"] = data.get("genre") or fallback.genre
-        data.setdefault("external_url", request.source_url)
-        draft = ArtistDraftData.model_validate(data)
         self._set_diagnostics(
             {
                 "target": "artist",
-                "mode": "ai_success",
+                "mode": "source_parse_only",
+                "reason": "AI is reserved for album write-up / Telegram post generation.",
                 "request": request.model_dump(mode="json"),
                 "source_context": {
                     "url": request.source_url,
                     "metadata": self._diagnostic_metadata(source_metadata),
                     "context_excerpt": context,
                 },
-                "ai_result": data,
                 "result": draft.model_dump(mode="json"),
             }
         )
@@ -1239,124 +1235,79 @@ class MetadataImporter:
     def create_album_draft(self, request: ImportRequest, *, model: str) -> AlbumDraftData:
         source_metadata = _page_metadata(request.source_url)
         context = self._build_context(request.source_url, metadata=source_metadata)
-        fallback_draft = _best_effort_album_draft(request, metadata=source_metadata)
-        if self.client is None:
-            draft = fallback_draft
-            self._set_diagnostics(
-                {
-                    "target": "album",
-                    "mode": "fallback_only",
-                    "reason": "OPENAI_API_KEY missing or AI client unavailable",
-                    "request": request.model_dump(mode="json"),
-                    "source_context": {
-                        "url": request.source_url,
-                        "metadata": self._diagnostic_metadata(source_metadata),
-                        "context_excerpt": context,
-                    },
-                    "result": draft.model_dump(mode="json"),
-                }
-            )
-            return draft
-        schema = {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "artist_name": {"type": "string"},
-                "artist_description": {"type": ["string", "null"]},
-                "album_external_url": {"type": ["string", "null"]},
-                "album_title": {"type": "string"},
-                "release_year": {"type": ["integer", "null"]},
-                "genre": {"type": ["string", "null"]},
-                "duration_seconds": {"type": ["integer", "null"]},
-                "cover_source_url": {"type": ["string", "null"]},
-                "album_type": {"type": ["string", "null"]},
-                "notes": {"type": ["string", "null"]},
-                "tracks": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "properties": {
-                            "track_number": {"type": "integer"},
-                            "title": {"type": "string"},
-                            "duration_seconds": {"type": ["integer", "null"]},
-                        },
-                        "required": ["track_number", "title", "duration_seconds"],
-                    },
-                },
-            },
-            "required": [
-                "artist_name",
-                "artist_description",
-                "album_external_url",
-                "album_title",
-                "release_year",
-                "genre",
-                "duration_seconds",
-                "cover_source_url",
-                "album_type",
-                "notes",
-                "tracks",
-            ],
-        }
-        prompt = (
-            f"Create an album metadata draft for artist '{request.artist_name}' and album '{request.album_title or ''}'. "
-            "Return only confident factual data. Use null for unknown fields. "
-            f"Preferred source URL: {request.source_url or 'none provided'}.\n"
-            "For album_type use Metal Archives naming: 'Full-length', 'EP', 'Single', 'Demo', 'Live album', 'Compilation', 'Split', 'Video'.\n"
-            "For notes: use null unless the source contains a real album description or review text. Do NOT put meta-commentary like 'Listed as an album on...' or source/type explanations — the album_type field already covers that.\n\n"
-            f"Reference context:\n{context}"
-        )
-        try:
-            data = self.client.generate_json(
-                model=model,
-                system_prompt="You extract album metadata for a local music catalog and ranking app.",
-                user_prompt=prompt,
-                schema_name="album_draft",
-                schema=schema,
-            )
-        except OpenAIClientError as exc:
-            self._mark_failure("AI request failed; using page metadata fallback.")
-            draft = fallback_draft
-            self._set_diagnostics(
-                {
-                    "target": "album",
-                    "mode": "ai_failed_fallback",
-                    "reason": str(exc),
-                    "request": request.model_dump(mode="json"),
-                    "source_context": {
-                        "url": request.source_url,
-                        "metadata": self._diagnostic_metadata(source_metadata),
-                        "context_excerpt": context,
-                    },
-                    "result": draft.model_dump(mode="json"),
-                }
-            )
-            return draft
+        draft = _best_effort_album_draft(request, metadata=source_metadata)
         self._mark_success()
-        draft = _merge_album_drafts(data, fallback_draft, request)
         self._set_diagnostics(
             {
                 "target": "album",
-                "mode": "ai_success",
+                "mode": "source_parse_only",
+                "reason": "AI is reserved for album write-up / Telegram post generation.",
                 "request": request.model_dump(mode="json"),
                 "source_context": {
                     "url": request.source_url,
                     "metadata": self._diagnostic_metadata(source_metadata),
                     "context_excerpt": context,
                 },
-                "ai_result": data,
-                "fallback_result": fallback_draft.model_dump(mode="json"),
                 "result": draft.model_dump(mode="json"),
             }
         )
         return draft
 
+    def _build_context(self, source_url: str | None, metadata: dict[str, Any] | None = None) -> str:
+        if not source_url:
+            return "No explicit source URL supplied. Use best-effort world knowledge only."
+        if metadata is None:
+            try:
+                metadata = _page_metadata(source_url)
+            except Exception:
+                metadata = {}
+        host = _host_label(source_url) or source_url
+        parts = [f"Source host: {host}", f"Source URL: {source_url}"]
+        if metadata.get("title"):
+            parts.append(f"Page title: {metadata['title']}")
+        if metadata.get("description"):
+            parts.append(f"Page description: {metadata['description']}")
+        excerpt = metadata.get("excerpt") or ""
+        if excerpt:
+            parts.append(f"Page text excerpt:\n{excerpt}")
+        return "\n".join(parts)
+
+    def _diagnostic_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        if not metadata:
+            return {}
+        return {
+            "title": metadata.get("title"),
+            "description": metadata.get("description"),
+            "image": metadata.get("image"),
+            "source_label": metadata.get("source_label"),
+            "excerpt": metadata.get("excerpt"),
+            "fetch_method": metadata.get("fetch_method"),
+            "fetch_error": metadata.get("fetch_error"),
+        }
+
+
+class AlbumWriteupGenerator:
+    def __init__(self, client: AlbumWriteupAIClient | None) -> None:
+        self.client = client
+        self.last_request_failed = False
+        self.last_error: str | None = None
+
+    def _mark_success(self) -> None:
+        self.last_request_failed = False
+        self.last_error = None
+
+    def _mark_failure(self, detail: str) -> None:
+        self.last_request_failed = True
+        self.last_error = detail
+
     def generate_album_overview(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:
+        # Compatibility wrapper for callers that still use the old "overview" name.
+        return self.generate_album_writeup(album, language=language, model=model)
+
+    def generate_album_writeup(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:
         if self.client is None:
             raise OpenAIClientError("OPENAI_API_KEY is not configured")
 
-        # Build context from Metal Archives or other external URL
         page_excerpt = ""
         if album.album_external_url:
             try:
@@ -1364,7 +1315,6 @@ class MetadataImporter:
             except Exception:
                 pass
 
-        # Also try Wikipedia
         wiki_excerpt = ""
         try:
             from urllib.parse import quote as _url_quote
@@ -1375,9 +1325,9 @@ class MetadataImporter:
             pass
 
         lang_instruction = (
-            "Write the overview in English."
+            "Write the album write-up in English."
             if language == "en"
-            else "Write the overview in Russian (Русский язык)."
+            else "Write the album write-up in Russian (Русский язык)."
         )
 
         tracklist_text = "\n".join(
@@ -1432,16 +1382,16 @@ class MetadataImporter:
         format_example = format_example_ru if language == "ru" else format_example_en
 
         prompt = (
-            f"Write a rich, factual overview for the following album.\n"
+            f"Write a rich, factual Telegram-ready album post for the following album.\n"
             f"{lang_instruction}\n"
             f"IMPORTANT: The genre value (after the 🎶 label) must always be written in English, "
-            f"even when the overview language is Russian.\n"
+            f"even when the write-up language is Russian.\n"
             f"Use the provided metadata and source excerpts. Search your knowledge for additional facts about the band and album.\n"
             f"For the '🎧 Listen' / '🎧 Слушать' line: format each streaming link as a markdown link "
             f"[Service Name](url). If a YouTube Music stream URL is provided in the album data, use it. "
             f"You may also add a Spotify link if you know it. Separate multiple links with ' | '. "
             f"If no stream URL is known, omit the Listen line entirely.\n"
-            f"Keep the overview informative but concise (3–6 sentences in the description paragraph).\n\n"
+            f"Keep the write-up informative but concise (3–6 sentences in the description paragraph).\n\n"
             f"{format_example}\n\n"
             f"Album data:\n{context}"
         )
@@ -1459,8 +1409,8 @@ class MetadataImporter:
             data = self.client.generate_json(
                 model=model,
                 system_prompt=(
-                    "You are a music writer creating concise, factual album overviews "
-                    "for a personal music library app. Use only verified facts."
+                    "You are a music writer creating concise, factual album write-ups "
+                    "for Telegram posts and a personal music library app. Use only verified facts."
                 ),
                 user_prompt=prompt,
                 schema_name="album_overview",
@@ -1471,38 +1421,49 @@ class MetadataImporter:
         except OpenAIClientError as exc:
             self._mark_failure(str(exc))
             raise
+        except Exception as exc:
+            self._mark_failure(str(exc))
+            raise
 
-    def _build_context(self, source_url: str | None, metadata: dict[str, Any] | None = None) -> str:
-        if not source_url:
-            return "No explicit source URL supplied. Use best-effort world knowledge only."
-        if metadata is None:
-            try:
-                metadata = _page_metadata(source_url)
-            except Exception:
-                metadata = {}
-        host = _host_label(source_url) or source_url
-        parts = [f"Source host: {host}", f"Source URL: {source_url}"]
-        if metadata.get("title"):
-            parts.append(f"Page title: {metadata['title']}")
-        if metadata.get("description"):
-            parts.append(f"Page description: {metadata['description']}")
-        excerpt = metadata.get("excerpt") or ""
-        if excerpt:
-            parts.append(f"Page text excerpt:\n{excerpt}")
-        return "\n".join(parts)
 
-    def _diagnostic_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
-        if not metadata:
-            return {}
-        return {
-            "title": metadata.get("title"),
-            "description": metadata.get("description"),
-            "image": metadata.get("image"),
-            "source_label": metadata.get("source_label"),
-            "excerpt": metadata.get("excerpt"),
-            "fetch_method": metadata.get("fetch_method"),
-            "fetch_error": metadata.get("fetch_error"),
-        }
+class MetadataImporter:
+    def __init__(
+        self,
+        client: AlbumWriteupAIClient | None,
+        *,
+        source_importer: SourceMetadataImporter | None = None,
+        writeup_generator: AlbumWriteupGenerator | None = None,
+    ) -> None:
+        self.source_importer = source_importer or SourceMetadataImporter()
+        self.writeup_generator = writeup_generator or AlbumWriteupGenerator(client)
+
+    @property
+    def client(self) -> AlbumWriteupAIClient | None:
+        return self.writeup_generator.client
+
+    @property
+    def last_request_failed(self) -> bool:
+        return self.writeup_generator.last_request_failed
+
+    @property
+    def last_error(self) -> str | None:
+        return self.writeup_generator.last_error
+
+    @property
+    def last_diagnostics(self) -> dict[str, Any]:
+        return self.source_importer.last_diagnostics
+
+    def create_artist_draft(self, request: ImportRequest, *, model: str) -> ArtistDraftData:
+        return self.source_importer.create_artist_draft(request, model=model)
+
+    def create_album_draft(self, request: ImportRequest, *, model: str) -> AlbumDraftData:
+        return self.source_importer.create_album_draft(request, model=model)
+
+    def generate_album_overview(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:
+        return self.writeup_generator.generate_album_overview(album, language=language, model=model)
+
+    def generate_album_writeup(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:
+        return self.writeup_generator.generate_album_writeup(album, language=language, model=model)
 
 
 class CoverDownloader:

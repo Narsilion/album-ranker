@@ -3,7 +3,22 @@ from __future__ import annotations
 import pytest
 
 from album_ranker import importer
-from album_ranker.schemas import ImportRequest
+from album_ranker.schemas import AlbumDetailRecord, ImportRequest
+
+
+class _FakeResponse:
+    def __init__(self, body: bytes, content_type: str = "text/html") -> None:
+        self.body = body
+        self.headers = {"Content-Type": content_type}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self, size: int = -1) -> bytes:
+        return self.body if size < 0 else self.body[:size]
 
 
 # ── _fix_allcaps ──────────────────────────────────────────────────────────────
@@ -20,6 +35,65 @@ from album_ranker.schemas import ImportRequest
 ])
 def test_fix_allcaps(text: str, expected: str) -> None:
     assert importer._fix_allcaps(text) == expected
+
+
+# ── source fetch guardrails ───────────────────────────────────────────────────
+
+def test_fetch_url_document_rejects_non_http_scheme() -> None:
+    with pytest.raises(ValueError, match="Only http and https"):
+        importer._fetch_url_document("file:///etc/passwd")
+
+
+def test_fetch_url_document_rejects_private_network_hosts() -> None:
+    with pytest.raises(ValueError, match="private or local"):
+        importer._fetch_url_document("http://127.0.0.1/internal")
+
+
+def test_fetch_with_urllib_rejects_unexpected_content_type(monkeypatch) -> None:
+    monkeypatch.setattr(
+        importer,
+        "urlopen",
+        lambda request, timeout: _FakeResponse(b"%PDF-1.7", "application/pdf"),
+    )
+
+    with pytest.raises(ValueError, match="Unsupported content type"):
+        importer._fetch_with_urllib("https://example.com/file.pdf")
+
+
+def test_fetch_with_urllib_rejects_oversized_response(monkeypatch) -> None:
+    monkeypatch.setattr(
+        importer,
+        "urlopen",
+        lambda request, timeout: _FakeResponse(b"x" * (importer.MAX_SOURCE_BYTES + 1), "text/html"),
+    )
+
+    with pytest.raises(ValueError, match="exceeds"):
+        importer._fetch_with_urllib("https://example.com/huge")
+
+
+def test_curl_fetch_uses_timeout_size_and_http_protocol_limits(monkeypatch) -> None:
+    captured = {}
+
+    class Result:
+        stdout = "<html></html>"
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return Result()
+
+    monkeypatch.setattr(importer.subprocess, "run", fake_run)
+
+    body, content_type = importer._fetch_with_curl("https://example.com/page")
+
+    assert body == "<html></html>"
+    assert content_type == "text/html"
+    assert "--proto" in captured["args"]
+    assert "=http,https" in captured["args"]
+    assert "--max-time" in captured["args"]
+    assert str(importer.SOURCE_FETCH_TIMEOUT_SECONDS) in captured["args"]
+    assert "--max-filesize" in captured["args"]
+    assert str(importer.MAX_SOURCE_BYTES) in captured["args"]
 
 
 # ── allcaps normalisation through _best_effort_album_draft ───────────────────
@@ -77,78 +151,110 @@ def test_allcaps_track_titles_are_normalised_for_metal_archives(monkeypatch) -> 
     assert draft.tracks[1].title == "Predator"
 
 
-def test_allcaps_album_title_via_ai_merge_is_normalised(monkeypatch) -> None:
-    html = "<html><head></head><body></body></html>"
+def test_album_import_does_not_call_ai_client(monkeypatch) -> None:
+    html = "<html><head><title>EXHALE THE PAST // INHALE THE FUTURE - HIMITZU</title></head><body></body></html>"
     monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
 
     class FakeClient:
         def generate_json(self, **kwargs):
-            return {
-                "artist_name": "HIMITZU",
-                "artist_description": None,
-                "album_external_url": None,
-                "album_title": "EXHALE THE PAST // INHALE THE FUTURE",
-                "release_year": 2026,
-                "genre": None,
-                "duration_seconds": None,
-                "cover_source_url": None,
-                "album_type": None,
-                "notes": None,
-                "tracks": [
-                    {"track_number": 1, "title": "LITTLE GIRL", "duration_seconds": 178},
-                    {"track_number": 2, "title": "PREDATOR", "duration_seconds": 236},
-                ],
-            }
+            raise AssertionError("AI client should not be used for album metadata import")
 
     metadata_importer = importer.MetadataImporter(FakeClient())
     draft = metadata_importer.create_album_draft(
         ImportRequest(
             artist_name="HIMITZU",
             album_title="",
-            source_url="https://music.youtube.com/playlist?list=OLAK5uy_example",
+            source_url="https://example.com/himitzu",
         ),
         model="gpt-5",
     )
 
     assert draft.album_title == "Exhale The Past // Inhale The Future"
-    assert draft.tracks[0].title == "Little Girl"
-    assert draft.tracks[1].title == "Predator"
+    assert draft.artist_name == "HIMITZU"
+    assert metadata_importer.last_diagnostics["mode"] == "source_parse_only"
 
 
-def test_mixed_case_title_is_left_unchanged_by_ai_merge(monkeypatch) -> None:
-    html = "<html><head></head><body></body></html>"
+def test_artist_import_does_not_call_ai_client(monkeypatch) -> None:
+    html = "<html><head><title>In Flames - official</title><meta name='description' content='Swedish metal band'></head><body></body></html>"
     monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
 
     class FakeClient:
         def generate_json(self, **kwargs):
-            return {
-                "artist_name": "In Flames",
-                "artist_description": None,
-                "album_external_url": None,
-                "album_title": "Come Clarity",
-                "release_year": 2006,
-                "genre": None,
-                "duration_seconds": None,
-                "cover_source_url": None,
-                "album_type": None,
-                "notes": None,
-                "tracks": [
-                    {"track_number": 1, "title": "Take This Life", "duration_seconds": 200},
-                ],
-            }
+            raise AssertionError("AI client should not be used for artist metadata import")
 
     metadata_importer = importer.MetadataImporter(FakeClient())
-    draft = metadata_importer.create_album_draft(
+    draft = metadata_importer.create_artist_draft(
         ImportRequest(
             artist_name="In Flames",
-            album_title="Come Clarity",
             source_url="https://example.com/in-flames",
         ),
         model="gpt-5",
     )
 
-    assert draft.album_title == "Come Clarity"
-    assert draft.tracks[0].title == "Take This Life"
+    assert draft.artist_name == "In Flames"
+    assert draft.description == "Swedish metal band"
+    assert metadata_importer.last_diagnostics["mode"] == "source_parse_only"
+
+
+def test_metadata_importer_delegates_source_and_writeup_responsibilities() -> None:
+    class FakeSourceImporter:
+        last_diagnostics = {"mode": "fake_source"}
+
+        def __init__(self) -> None:
+            self.artist_called = False
+
+        def create_artist_draft(self, request, *, model):
+            self.artist_called = True
+            return importer.ArtistDraftData(artist_name=request.artist_name or "Band")
+
+        def create_album_draft(self, request, *, model):
+            raise AssertionError("not used")
+
+    class FakeWriteupGenerator:
+        client = None
+        last_request_failed = False
+        last_error = None
+
+        def __init__(self) -> None:
+            self.writeup_called = False
+
+        def generate_album_overview(self, album, *, language, model):
+            return self.generate_album_writeup(album, language=language, model=model)
+
+        def generate_album_writeup(self, album, *, language, model):
+            self.writeup_called = True
+            return f"{album.artist_name} - {album.title}"
+
+    source = FakeSourceImporter()
+    writeup = FakeWriteupGenerator()
+    metadata_importer = importer.MetadataImporter(
+        None,
+        source_importer=source,  # type: ignore[arg-type]
+        writeup_generator=writeup,  # type: ignore[arg-type]
+    )
+
+    artist_draft = metadata_importer.create_artist_draft(
+        ImportRequest(artist_name="Delegated Band", source_url="https://example.com"),
+        model="gpt-5",
+    )
+    writeup_text = metadata_importer.generate_album_writeup(
+        AlbumDetailRecord(
+            id=1,
+            artist_id=1,
+            artist_name="Delegated Band",
+            title="Delegated Album",
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        ),
+        language="en",
+        model="gpt-5",
+    )
+
+    assert source.artist_called is True
+    assert writeup.writeup_called is True
+    assert artist_draft.artist_name == "Delegated Band"
+    assert writeup_text == "Delegated Band - Delegated Album"
+    assert metadata_importer.last_diagnostics == {"mode": "fake_source"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -464,18 +570,7 @@ def test_ai_album_draft_is_enriched_with_fallback_when_ai_returns_source_page_as
 
     class FakeClient:
         def generate_json(self, **kwargs):
-            return {
-                "artist_name": "Vanir",
-                "artist_description": None,
-                "album_external_url": None,
-                "album_title": "Wyrd",
-                "release_year": None,
-                "genre": None,
-                "duration_seconds": None,
-                "cover_source_url": "https://www.metal-archives.com/albums/Vanir/Wyrd/1396086",
-                "notes": None,
-                "tracks": [],
-            }
+            raise AssertionError("AI client should not be used for album metadata import")
 
     metadata_importer = importer.MetadataImporter(FakeClient())
     draft = metadata_importer.create_album_draft(
@@ -686,4 +781,3 @@ def test_alterportal_artist_draft_parses_page(monkeypatch) -> None:
     assert draft.genre == "Alternative Rock"
     assert draft.description is None
     assert draft.external_url == "https://alterportal.net/2026_albums/189049-earlyrise-the-flood-is-coming-2026.html"
-

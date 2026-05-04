@@ -40,8 +40,8 @@ def _display_multiline_text(value: str | None) -> str:
     return html.escape(text)
 
 
-def _render_overview(text: str | None) -> str:
-    """Escape overview text but convert [label](url) markdown links to clickable <a> tags."""
+def _render_writeup(text: str | None) -> str:
+    """Escape album write-up text but convert [label](url) markdown links to clickable <a> tags."""
     import re
     if not text:
         return ""
@@ -1081,10 +1081,10 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         <a class="brand" href="/albums" style="display:block; text-decoration:none;">Album<br>Ranker<small>Local Library</small></a>
         <nav class="nav">{nav_markup}</nav>
         <div class="sidebar-foot">
-          Active model: <strong>{_escape(str(page_state["settings"]["active_model"]))}</strong><br>
+          Write-up model: <strong>{_escape(str(page_state["settings"]["writeup_model"]))}</strong><br>
           Host: {_escape(str(page_state["settings"]["host"]))}:{_escape(str(page_state["settings"]["port"]))}
           <div class="sidebar-status">
-            AI: <strong>{_escape(str(page_state["settings"]["ai_status"]).replace("_", " "))}</strong>
+            Write-up generation: <strong>{_escape(str(page_state["settings"]["ai_status"]).replace("_", " "))}</strong>
             {f"<br>{_escape(str(page_state['settings'].get('ai_status_detail') or ''))}" if page_state["settings"].get("ai_status_detail") else ""}
           </div>
         </div>
@@ -2056,7 +2056,7 @@ def render_artist_detail_page(
           <button type="button" id="artistEditToggle" class="secondary" style="margin-bottom:8px;" aria-controls="artistEditPanel" aria-expanded="false">Edit Artist Metadata</button>
           <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px; width:100%; max-width:none; justify-self:stretch;">
             <input id="artistRefreshUrlInput" class="compact-url-input" placeholder="Source URL (optional)" value="{_escape(artist.external_url)}" style="flex:1 1 auto; min-width:0; max-width:none;">
-            <button type="button" id="artistRefreshBtn" class="secondary" style="white-space:nowrap; flex:0 0 auto;" title="Re-fetch metadata from source URL using AI">&#8635; Refresh</button>
+            <button type="button" id="artistRefreshBtn" class="secondary" style="white-space:nowrap; flex:0 0 auto;" title="Re-fetch metadata from source URL">&#8635; Refresh</button>
             <button type="button" id="artistRefreshCancelBtn" class="secondary hidden" style="white-space:nowrap; flex:0 0 auto;">Cancel</button>
           </div>
           <div id="artistRefreshProgress" style="display:none; margin-bottom:4px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
@@ -2386,7 +2386,7 @@ def render_artist_detail_page(
             btn.classList.add("hidden");
             urlInput.disabled = true;
             cancelBtn.classList.remove("hidden");
-            status.textContent = "Fetching source and generating metadata\u2026";
+            status.textContent = "Fetching source and parsing metadata\u2026";
             progress.style.display = "block";
             const reviewPanel = document.getElementById("artistRefreshReview");
             if (reviewPanel) reviewPanel.classList.add("hidden");
@@ -2651,7 +2651,7 @@ def render_imports_page(settings: SettingsRecord) -> str:
       <section class="hero compact">
         <div class="eyebrow">Imports</div>
         <h1>Import an album from a source URL</h1>
-        <p>Paste a Metal Archives album page, review the artist draft when the artist is missing, then save the album in one pass.</p>
+        <p>Paste an album page, review the artist draft when the artist is missing, then save the album in one pass.</p>
       </section>
       <section class="panel" style="margin-top:20px;">
         <div class="panel-title">Album URL Import</div>
@@ -2968,7 +2968,7 @@ def render_albums_page(
       <section class="hero compact">
         <div class="eyebrow">Albums</div>
         <h1>See the library as a wall of records</h1>
-        <p>Filter by genre, year, or artist, open any cover into the full album detail view, and add manual entries from here. AI album import now lives on the Artists page so the import stays tied to the artist you picked.</p>
+        <p>Filter by genre, year, or artist, open any cover into the full album detail view, and add manual entries from here. Album import now lives on the Artists page so the import stays tied to the artist you picked.</p>
       </section>
       <section class="panel" style="margin-top:20px;">
         <div class="panel-title">Filters</div>
@@ -3115,7 +3115,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             <div class="status album-listened-state" data-album-id="{album.id}" style="text-align:center;">{"Listened" if album.listened_at else "Not Listened"}</div>
             <button type="button" id="albumEditToggle" class="secondary" style="margin-bottom:8px;" aria-controls="albumEditPanel" aria-expanded="false">Edit Album Metadata</button>
             <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px;">
-              <button type="button" id="albumRefreshBtn" class="secondary" title="Re-fetch metadata from source URL using AI" aria-controls="albumRefreshSourcePanel" aria-expanded="false">&#8635; Refresh Metadata</button>
+              <button type="button" id="albumRefreshBtn" class="secondary" title="Re-fetch metadata from source URL" aria-controls="albumRefreshSourcePanel" aria-expanded="false">&#8635; Refresh Metadata</button>
             </div>
             <div id="albumRefreshSourcePanel" class="hidden" style="margin-bottom:4px;">
               <input id="albumRefreshUrlInput" class="compact-url-input" placeholder="https://..." value="{_escape(album.album_external_url)}" style="margin-bottom:4px;">
@@ -3269,7 +3269,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
       </section>
       <section class="panel" style="margin-top:16px; max-width:884px;">
         <div class="detail-head" style="margin-bottom:0;">
-          <div class="panel-title" style="margin-bottom:0;">Overview</div>
+          <div class="panel-title" style="margin-bottom:0;">Album Write-up / Telegram Post</div>
           <div class="row" style="gap:8px; align-items:center;">
             <label style="font-size:0.85em; color:var(--muted); display:flex; align-items:center; gap:4px; cursor:pointer;">
               <input type="radio" name="overviewLang" value="en" {"checked" if True else ""}> English
@@ -3277,7 +3277,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             <label style="font-size:0.85em; color:var(--muted); display:flex; align-items:center; gap:4px; cursor:pointer;">
               <input type="radio" name="overviewLang" value="ru"> Russian
             </label>
-            <button type="button" id="overviewGenerateBtn" class="secondary" style="flex:0 0 auto; font-size:0.85em;">{"✦ Regenerate" if album.overview else "✦ Generate Overview"}</button>
+            <button type="button" id="overviewGenerateBtn" class="secondary" style="flex:0 0 auto; font-size:0.85em;">{"✦ Regenerate" if album.overview else "✦ Generate Write-up"}</button>
             <button type="button" id="overviewCancelBtn" class="secondary hidden" style="flex:0 0 auto; font-size:0.85em;">Cancel</button>
           </div>
         </div>
@@ -3285,15 +3285,15 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           <div style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
         </div>
         <div class="status" id="overviewStatus" style="font-size:0.85em; margin-top:6px;"></div>
-        {(f'<div id="overviewDisplay" style="white-space:pre-wrap; font-size:0.95em; line-height:1.6; margin-top:12px;">{_render_overview(album.overview)}</div>') if album.overview else '<div id="overviewDisplay" style="display:none; white-space:pre-wrap; font-size:0.95em; line-height:1.6; margin-top:12px;"></div>'}
+        {(f'<div id="overviewDisplay" style="white-space:pre-wrap; font-size:0.95em; line-height:1.6; margin-top:12px;">{_render_writeup(album.overview)}</div>') if album.overview else '<div id="overviewDisplay" style="display:none; white-space:pre-wrap; font-size:0.95em; line-height:1.6; margin-top:12px;"></div>'}
       </section>
       <section class="panel hidden" id="overviewDraftPanel" style="margin-top:16px; max-width:884px;">
-        <div class="panel-title">Review Generated Overview</div>
+        <div class="panel-title">Review Generated Write-up</div>
         <div class="form-field">
           <textarea id="overviewDraftText" rows="14" style="font-family:inherit; font-size:0.92em; line-height:1.6;"></textarea>
         </div>
         <div class="row">
-          <button type="button" id="overviewSaveBtn">Save Overview</button>
+          <button type="button" id="overviewSaveBtn">Save Write-up</button>
           <button type="button" class="secondary" id="overviewRejectBtn">Reject</button>
           <span class="status" id="overviewSaveStatus"></span>
         </div>
@@ -3477,7 +3477,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             urlInput.disabled = true;
             generateBtn.textContent = 'Generating\u2026';
             cancelBtn.textContent = 'Cancel';
-            status.textContent = 'Fetching source and generating metadata\u2026';
+            status.textContent = 'Fetching source and parsing metadata\u2026';
             progress.style.display = 'block';
             reviewPanel.classList.add('hidden');
             try {{
@@ -3615,16 +3615,16 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             abortCtrl = new AbortController();
             generateBtn.classList.add('hidden');
             cancelBtn.classList.remove('hidden');
-            statusEl.textContent = 'Generating overview\u2026';
+            statusEl.textContent = 'Generating write-up\u2026';
             progress.style.display = 'block';
             draftPanel.classList.add('hidden');
             try {{
-              const resp = await fetchJson('/api/albums/{album.id}/overview/draft', {{
+              const resp = await fetchJson('/api/albums/{album.id}/write-up/draft', {{
                 method: 'POST',
                 signal: abortCtrl.signal,
                 body: JSON.stringify({{ language: lang }}),
               }});
-              draftText.value = resp.overview || '';
+              draftText.value = resp.writeup || '';
               resetGenerateUI();
               statusEl.textContent = 'Draft ready \u2014 review below.';
               draftPanel.classList.remove('hidden');
@@ -3644,9 +3644,9 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             saveStatus.textContent = 'Saving\u2026';
             const text = draftText.value.trim() || null;
             try {{
-              await fetchJson('/api/albums/{album.id}/overview', {{
+              await fetchJson('/api/albums/{album.id}/write-up', {{
                 method: 'PATCH',
-                body: JSON.stringify({{ overview: text }}),
+                body: JSON.stringify({{ writeup: text }}),
               }});
               saveStatus.textContent = '\u2713 Saved \u2014 reloading\u2026';
               window.location.reload();
@@ -4127,7 +4127,7 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
 
 def render_settings_page(settings: SettingsRecord) -> str:
     options = "".join(
-        f'<option value="{_escape(model)}"{" selected" if model == settings.active_model else ""}>{_escape(model)}</option>'
+        f'<option value="{_escape(model)}"{" selected" if model == settings.writeup_model else ""}>{_escape(model)}</option>'
         for model in settings.available_models
     )
     _themes = [
@@ -4146,14 +4146,14 @@ def render_settings_page(settings: SettingsRecord) -> str:
     body = f"""
       <section class="hero compact">
         <div class="eyebrow">Settings</div>
-        <h1>Keep AI optional and visible</h1>
-        <p>Choose the active OpenAI model used for draft generation, and pick a colour theme for the interface.</p>
+        <h1>Keep write-up generation optional and visible</h1>
+        <p>Choose the OpenAI model used only for album write-ups and Telegram post drafts, and pick a colour theme for the interface.</p>
       </section>
       <section class="grid two">
         <section class="panel">
-          <div class="panel-title">Model</div>
+          <div class="panel-title">Write-up Model</div>
           <form id="settingsForm">
-            <select name="active_model">{options}</select>
+            <select name="writeup_model">{options}</select>
             <div class="panel-title" style="margin-top:20px;">Theme</div>
             <div class="theme-picker">{theme_options}</div>
             <div class="row" style="margin-top:16px;">
@@ -4164,8 +4164,8 @@ def render_settings_page(settings: SettingsRecord) -> str:
         </section>
         <section class="panel">
           <div class="panel-title">Runtime</div>
-          <p class="muted">OpenAI key configured: <strong>{'yes' if settings.openai_api_key_configured else 'no'}</strong></p>
-          <p class="muted">AI status: <strong>{_escape(settings.ai_status.replace("_", " "))}</strong></p>
+          <p class="muted">OpenAI key for write-up generation: <strong>{'configured' if settings.openai_api_key_configured else 'missing'}</strong></p>
+          <p class="muted">Write-up generation status: <strong>{_escape(settings.ai_status.replace("_", " "))}</strong></p>
           {f'<p class="muted">{_escape(settings.ai_status_detail)}</p>' if settings.ai_status_detail else ''}
           <p class="muted">Server: {_escape(settings.host)}:{settings.port}</p>
           <p class="muted">Default model: {_escape(settings.model)}</p>
@@ -4224,11 +4224,11 @@ def render_settings_page(settings: SettingsRecord) -> str:
           const status = document.getElementById("settingsStatus");
           try {{
             status.textContent = "Saving...";
-            validateRequired(form.active_model.value, "Model");
+            validateRequired(form.writeup_model.value, "Write-up model");
             const selectedTheme = form.querySelector("input[name=theme]:checked")?.value || "dark";
             await fetchJson("/api/settings", {{
               method: "PUT",
-              body: JSON.stringify({{ active_model: form.active_model.value, theme: selectedTheme }}),
+              body: JSON.stringify({{ writeup_model: form.writeup_model.value, theme: selectedTheme }}),
             }});
             status.textContent = "Settings saved.";
             setTimeout(() => window.location.reload(), 600);

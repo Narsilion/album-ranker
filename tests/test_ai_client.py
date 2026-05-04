@@ -6,7 +6,7 @@ from urllib.error import HTTPError, URLError
 import pytest
 
 from album_ranker import openai_client
-from album_ranker.openai_client import AIClientError, GitHubModelsClient, OpenAIClient
+from album_ranker.openai_client import AIClientError, AlbumWriteupAIClient, OpenAIClient
 
 
 class FakeResponse:
@@ -31,41 +31,39 @@ class FakeErrorBody:
         return None
 
 
-def test_github_models_client_sends_json_schema_request(monkeypatch) -> None:
+def test_album_writeup_ai_client_sends_json_schema_request(monkeypatch) -> None:
     captured = {}
 
     def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
         captured["request"] = request
         captured["timeout"] = timeout
-        return FakeResponse({"choices": [{"message": {"content": '{"name":"Wyrd"}'}}]})
+        return FakeResponse({"choices": [{"message": {"content": '{"overview":"Wyrd"}'}}]})
 
     monkeypatch.setattr(openai_client, "urlopen", fake_urlopen)
 
-    result = GitHubModelsClient("gh-token").generate_json(
-        model="openai/gpt-4.1",
+    result = AlbumWriteupAIClient("openai-token").generate_json(
+        model="gpt-5-mini",
         system_prompt="System",
         user_prompt="User",
-        schema_name="album_draft",
-        schema={"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+        schema_name="album_writeup",
+        schema={"type": "object", "properties": {"overview": {"type": "string"}}, "required": ["overview"]},
     )
 
     request = captured["request"]
     body = json.loads(request.data.decode("utf-8"))
-    assert result == {"name": "Wyrd"}
+    assert result == {"overview": "Wyrd"}
     assert captured["timeout"] == 90
-    assert request.full_url == openai_client.GITHUB_MODELS_API_URL
-    assert request.get_header("Authorization") == "Bearer gh-token"
-    assert request.get_header("Accept") == "application/vnd.github+json"
-    assert request.get_header("X-github-api-version") == openai_client.GITHUB_MODELS_API_VERSION
-    assert body["model"] == "openai/gpt-4.1"
+    assert request.full_url == openai_client.OPENAI_API_URL
+    assert request.get_header("Authorization") == "Bearer openai-token"
+    assert body["model"] == "gpt-5-mini"
     assert body["response_format"]["type"] == "json_schema"
-    assert body["response_format"]["json_schema"]["name"] == "album_draft"
+    assert body["response_format"]["json_schema"]["name"] == "album_writeup"
 
 
-def test_github_models_client_requires_token() -> None:
-    with pytest.raises(AIClientError, match="GITHUB_MODELS_TOKEN is not configured"):
-        GitHubModelsClient(None).generate_json(
-            model="openai/gpt-4.1",
+def test_album_writeup_ai_client_requires_api_key() -> None:
+    with pytest.raises(AIClientError, match="OPENAI_API_KEY is not configured"):
+        AlbumWriteupAIClient(None).generate_json(
+            model="gpt-5-mini",
             system_prompt="System",
             user_prompt="User",
             schema_name="result",
@@ -73,46 +71,11 @@ def test_github_models_client_requires_token() -> None:
         )
 
 
-def test_github_models_client_lists_text_generation_models(monkeypatch) -> None:
-    captured = {}
-
-    def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
-        captured["request"] = request
-        captured["timeout"] = timeout
-        return FakeResponse(
-            [
-                {
-                    "id": "openai/gpt-5",
-                    "supported_input_modalities": ["text", "image"],
-                    "supported_output_modalities": ["text"],
-                },
-                {
-                    "id": "openai/text-embedding-3-small",
-                    "supported_input_modalities": ["text"],
-                    "supported_output_modalities": ["embeddings"],
-                },
-                {
-                    "id": "meta/llama-3.3-70b-instruct",
-                    "supported_input_modalities": ["text"],
-                    "supported_output_modalities": ["text"],
-                },
-            ]
-        )
-
-    monkeypatch.setattr(openai_client, "urlopen", fake_urlopen)
-
-    models = GitHubModelsClient("gh-token").list_models()
-
-    request = captured["request"]
-    assert models == ["meta/llama-3.3-70b-instruct", "openai/gpt-5"]
-    assert captured["timeout"] == 30
-    assert request.full_url == openai_client.GITHUB_MODELS_CATALOG_API_URL
-    assert request.get_header("Authorization") == "Bearer gh-token"
-    assert request.get_header("Accept") == "application/vnd.github+json"
-    assert request.get_header("X-github-api-version") == openai_client.GITHUB_MODELS_API_VERSION
+def test_openai_client_aliases_album_writeup_ai_client() -> None:
+    assert OpenAIClient is AlbumWriteupAIClient
 
 
-def test_openai_client_lists_text_generation_models(monkeypatch) -> None:
+def test_album_writeup_ai_client_lists_text_generation_models(monkeypatch) -> None:
     captured = {}
 
     def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
@@ -132,7 +95,7 @@ def test_openai_client_lists_text_generation_models(monkeypatch) -> None:
 
     monkeypatch.setattr(openai_client, "urlopen", fake_urlopen)
 
-    models = OpenAIClient("openai-token").list_models()
+    models = AlbumWriteupAIClient("openai-token").list_models()
 
     request = captured["request"]
     assert models == ["gpt-4.1-mini", "gpt-5", "o3-mini"]
@@ -141,15 +104,15 @@ def test_openai_client_lists_text_generation_models(monkeypatch) -> None:
     assert request.get_header("Authorization") == "Bearer openai-token"
 
 
-def test_github_models_client_reports_http_errors(monkeypatch) -> None:
+def test_album_writeup_ai_client_reports_http_errors(monkeypatch) -> None:
     def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
         raise HTTPError(request.full_url, 429, "Too Many Requests", hdrs=None, fp=FakeErrorBody())
 
     monkeypatch.setattr(openai_client, "urlopen", fake_urlopen)
 
-    with pytest.raises(AIClientError, match="GitHub Models request failed with status 429"):
-        GitHubModelsClient("gh-token").generate_json(
-            model="openai/gpt-4.1",
+    with pytest.raises(AIClientError, match="OpenAI request failed with status 429"):
+        AlbumWriteupAIClient("openai-token").generate_json(
+            model="gpt-5-mini",
             system_prompt="System",
             user_prompt="User",
             schema_name="result",
@@ -157,15 +120,15 @@ def test_github_models_client_reports_http_errors(monkeypatch) -> None:
         )
 
 
-def test_github_models_client_reports_network_errors(monkeypatch) -> None:
+def test_album_writeup_ai_client_reports_network_errors(monkeypatch) -> None:
     def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
         raise URLError("offline")
 
     monkeypatch.setattr(openai_client, "urlopen", fake_urlopen)
 
-    with pytest.raises(AIClientError, match="GitHub Models request failed"):
-        GitHubModelsClient("gh-token").generate_json(
-            model="openai/gpt-4.1",
+    with pytest.raises(AIClientError, match="OpenAI request failed"):
+        AlbumWriteupAIClient("openai-token").generate_json(
+            model="gpt-5-mini",
             system_prompt="System",
             user_prompt="User",
             schema_name="result",

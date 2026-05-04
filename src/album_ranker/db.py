@@ -50,6 +50,13 @@ def _parse_genres_db(value: str | None) -> list[str]:
     return [stripped]
 
 
+def _normalize_genre(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = re.sub(r"\s+", " ", value.strip()).lower()
+    return normalized or None
+
+
 def slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug or "artist"
@@ -82,6 +89,7 @@ class Database:
                     title TEXT NOT NULL,
                     release_year INTEGER,
                     genre TEXT,
+                    genre_normalized TEXT,
                     rating INTEGER,
                     duration_seconds INTEGER,
                     cover_image_path TEXT,
@@ -152,6 +160,7 @@ class Database:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
                 """
             )
             connection.execute(
@@ -164,6 +173,8 @@ class Database:
                 connection.execute("ALTER TABLE albums ADD COLUMN album_stream_url TEXT")
             if "album_type" not in album_columns:
                 connection.execute("ALTER TABLE albums ADD COLUMN album_type TEXT")
+            if "genre_normalized" not in album_columns:
+                connection.execute("ALTER TABLE albums ADD COLUMN genre_normalized TEXT")
             if "rating" not in album_columns:
                 connection.execute("ALTER TABLE albums ADD COLUMN rating INTEGER")
             artist_columns = {row["name"] for row in connection.execute("PRAGMA table_info(artists)").fetchall()}
@@ -180,6 +191,24 @@ class Database:
                 connection.execute("ALTER TABLE albums ADD COLUMN bookmarked_at TEXT")
             if "listened_at" not in album_columns:
                 connection.execute("ALTER TABLE albums ADD COLUMN listened_at TEXT")
+            connection.execute(
+                """
+                UPDATE albums
+                SET genre_normalized = lower(trim(genre))
+                WHERE genre IS NOT NULL
+                  AND (genre_normalized IS NULL OR genre_normalized != lower(trim(genre)))
+                """
+            )
+            connection.executescript(
+                """
+                CREATE INDEX IF NOT EXISTS idx_albums_artist_id ON albums(artist_id);
+                CREATE INDEX IF NOT EXISTS idx_albums_release_year ON albums(release_year);
+                CREATE INDEX IF NOT EXISTS idx_albums_genre_normalized ON albums(genre_normalized);
+                CREATE INDEX IF NOT EXISTS idx_artists_slug ON artists(slug);
+                CREATE INDEX IF NOT EXISTS idx_list_items_list_id ON list_items(list_id);
+                CREATE INDEX IF NOT EXISTS idx_list_items_album_id ON list_items(album_id);
+                """
+            )
 
     @contextmanager
     def connection(self) -> sqlite3.Connection:
@@ -225,6 +254,7 @@ class Database:
         return SettingsRecord(
             model=default_model,
             active_model=self.get_active_model(default_model),
+            writeup_model=self.get_active_model(default_model),
             available_models=available_models,
             openai_api_key_configured=openai_api_key_configured,
             ai_status=ai_status,
@@ -236,12 +266,13 @@ class Database:
         )
 
     def update_settings(self, payload: SettingsUpdateRequest) -> None:
-        if not payload.active_model.strip():
-            raise ValueError("Choose a model before saving settings.")
+        selected_model = payload.selected_model.strip()
+        if not selected_model:
+            raise ValueError("Choose a write-up model before saving settings.")
         allowed_themes = {"dark", "dark-brown", "dark-green"}
         if payload.theme not in allowed_themes:
             raise ValueError("Invalid theme value.")
-        self.set_app_setting("active_model", payload.active_model)
+        self.set_app_setting("active_model", selected_model)
         self.set_app_setting("theme", payload.theme)
 
     def list_genres(self) -> list[GenreRecord]:
@@ -250,20 +281,19 @@ class Database:
         return [GenreRecord.model_validate(dict(row)) for row in rows]
 
     def create_genre(self, payload: GenreUpsert) -> GenreRecord:
+        existing = self.get_genre_by_name(payload.name)
+        if existing is not None:
+            return existing
         now = utc_now_iso()
         with self.connection() as connection:
             cursor = connection.execute(
                 """
                 INSERT INTO genres(name, created_at, updated_at)
                 VALUES (?, ?, ?)
-                ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
                 """,
                 (payload.name, now, now),
             )
-            genre_id = int(cursor.lastrowid or connection.execute(
-                "SELECT id FROM genres WHERE lower(name) = lower(?)",
-                (payload.name,),
-            ).fetchone()["id"])
+            genre_id = int(cursor.lastrowid)
         return self.get_genre(genre_id)
 
     def get_genre(self, genre_id: int) -> GenreRecord:
@@ -273,8 +303,21 @@ class Database:
             raise KeyError(f"Unknown genre {genre_id}")
         return GenreRecord.model_validate(dict(row))
 
+    def get_genre_by_name(self, name: str) -> GenreRecord | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM genres WHERE lower(name) = lower(?)",
+                (name,),
+            ).fetchone()
+        if row is None:
+            return None
+        return GenreRecord.model_validate(dict(row))
+
     def update_genre(self, genre_id: int, payload: GenreUpsert) -> GenreRecord:
         self.get_genre(genre_id)
+        existing = self.get_genre_by_name(payload.name)
+        if existing is not None and existing.id != genre_id:
+            raise ValueError(f"Genre '{payload.name}' already exists")
         with self.connection() as connection:
             connection.execute(
                 """
@@ -495,15 +538,16 @@ class Database:
             cursor = connection.execute(
                 """
                 INSERT INTO albums(
-                    artist_id, title, release_year, genre, rating, duration_seconds, cover_image_path,
+                    artist_id, title, release_year, genre, genre_normalized, rating, duration_seconds, cover_image_path,
                     cover_source_url, album_external_url, album_stream_url, album_type, notes, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     artist_id,
                     payload.title,
                     payload.release_year,
                     payload.genre,
+                    _normalize_genre(payload.genre),
                     payload.rating,
                     payload.duration_seconds,
                     payload.cover_image_path,
@@ -527,7 +571,7 @@ class Database:
             connection.execute(
                 """
                 UPDATE albums
-                SET artist_id = ?, title = ?, release_year = ?, genre = ?, rating = ?, duration_seconds = ?,
+                SET artist_id = ?, title = ?, release_year = ?, genre = ?, genre_normalized = ?, rating = ?, duration_seconds = ?,
                     cover_image_path = ?, cover_source_url = ?, album_external_url = ?, album_stream_url = ?, album_type = ?, notes = ?, updated_at = ?
                 WHERE id = ?
                 """,
@@ -536,6 +580,7 @@ class Database:
                     payload.title,
                     payload.release_year,
                     payload.genre,
+                    _normalize_genre(payload.genre),
                     payload.rating,
                     payload.duration_seconds,
                     payload.cover_image_path,
@@ -591,11 +636,15 @@ class Database:
         return self.get_album(album_id)
 
     def update_album_overview(self, album_id: int, overview: str | None) -> AlbumDetailRecord:
+        # Stored as "overview" for compatibility; product language is album write-up / Telegram post.
+        return self.update_album_writeup(album_id, overview)
+
+    def update_album_writeup(self, album_id: int, writeup: str | None) -> AlbumDetailRecord:
         self.get_album(album_id)
         with self.connection() as connection:
             connection.execute(
                 "UPDATE albums SET overview = ?, updated_at = ? WHERE id = ?",
-                (overview, utc_now_iso(), album_id),
+                (writeup, utc_now_iso(), album_id),
             )
         return self.get_album(album_id)
 
@@ -613,24 +662,7 @@ class Database:
         with self.connection() as connection:
             connection.execute("DELETE FROM albums WHERE id = ?", (album_id,))
 
-    def list_lists(self) -> list[AlbumListRecord]:
-        with self.connection() as connection:
-            list_rows = connection.execute(
-                "SELECT * FROM album_lists ORDER BY updated_at DESC, id DESC"
-            ).fetchall()
-            item_rows = connection.execute(
-                """
-                SELECT list_items.id, list_items.list_id, list_items.album_id, list_items.rank_position,
-                       albums.artist_id, albums.title, albums.release_year, albums.genre, albums.rating, albums.duration_seconds,
-                       albums.cover_image_path, albums.cover_source_url, albums.album_external_url, albums.album_stream_url,
-                       albums.album_type, albums.notes, albums.bookmarked_at, albums.listened_at, albums.created_at, albums.updated_at,
-                       artists.name AS artist_name
-                FROM list_items
-                JOIN albums ON albums.id = list_items.album_id
-                JOIN artists ON artists.id = albums.artist_id
-                ORDER BY list_items.rank_position ASC, list_items.id ASC
-                """
-            ).fetchall()
+    def _list_item_records(self, item_rows: list[sqlite3.Row]) -> dict[int, list[AlbumListItemRecord]]:
         items_by_list: dict[int, list[AlbumListItemRecord]] = {}
         for row in item_rows:
             album = AlbumCardRecord.model_validate(
@@ -663,22 +695,63 @@ class Database:
                 album=album,
             )
             items_by_list.setdefault(item.list_id, []).append(item)
+        return items_by_list
+
+    def _album_list_record(self, row: sqlite3.Row, items: list[AlbumListItemRecord]) -> AlbumListRecord:
+        return AlbumListRecord.model_validate(
+            {
+                **dict(row),
+                "genres": _parse_genres_db(row["genre_filter_hint"]),
+                "items": [item.model_dump() for item in items],
+            }
+        )
+
+    def list_lists(self) -> list[AlbumListRecord]:
+        with self.connection() as connection:
+            list_rows = connection.execute(
+                "SELECT * FROM album_lists ORDER BY updated_at DESC, id DESC"
+            ).fetchall()
+            item_rows = connection.execute(
+                """
+                SELECT list_items.id, list_items.list_id, list_items.album_id, list_items.rank_position,
+                       albums.artist_id, albums.title, albums.release_year, albums.genre, albums.rating, albums.duration_seconds,
+                       albums.cover_image_path, albums.cover_source_url, albums.album_external_url, albums.album_stream_url,
+                       albums.album_type, albums.notes, albums.bookmarked_at, albums.listened_at, albums.created_at, albums.updated_at,
+                       artists.name AS artist_name
+                FROM list_items
+                JOIN albums ON albums.id = list_items.album_id
+                JOIN artists ON artists.id = albums.artist_id
+                ORDER BY list_items.rank_position ASC, list_items.id ASC
+                """
+            ).fetchall()
+        items_by_list = self._list_item_records(item_rows)
         return [
-            AlbumListRecord.model_validate(
-                {
-                    **dict(row),
-                    "genres": _parse_genres_db(row["genre_filter_hint"]),
-                    "items": [item.model_dump() for item in items_by_list.get(int(row["id"]), [])],
-                }
-            )
+            self._album_list_record(row, items_by_list.get(int(row["id"]), []))
             for row in list_rows
         ]
 
     def get_list(self, list_id: int) -> AlbumListRecord:
-        for record in self.list_lists():
-            if record.id == list_id:
-                return record
-        raise KeyError(f"Unknown list {list_id}")
+        with self.connection() as connection:
+            row = connection.execute("SELECT * FROM album_lists WHERE id = ?", (list_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown list {list_id}")
+            item_rows = connection.execute(
+                """
+                SELECT list_items.id, list_items.list_id, list_items.album_id, list_items.rank_position,
+                       albums.artist_id, albums.title, albums.release_year, albums.genre, albums.rating, albums.duration_seconds,
+                       albums.cover_image_path, albums.cover_source_url, albums.album_external_url, albums.album_stream_url,
+                       albums.album_type, albums.notes, albums.bookmarked_at, albums.listened_at, albums.created_at, albums.updated_at,
+                       artists.name AS artist_name
+                FROM list_items
+                JOIN albums ON albums.id = list_items.album_id
+                JOIN artists ON artists.id = albums.artist_id
+                WHERE list_items.list_id = ?
+                ORDER BY list_items.rank_position ASC, list_items.id ASC
+                """,
+                (list_id,),
+            ).fetchall()
+        items_by_list = self._list_item_records(item_rows)
+        return self._album_list_record(row, items_by_list.get(list_id, []))
 
     def create_list(self, payload: AlbumListUpsert) -> AlbumListRecord:
         now = utc_now_iso()
@@ -795,11 +868,13 @@ class Database:
         if payload.year is not None:
             filters.append("release_year = ?")
             params.append(payload.year)
-        if payload.genres:
-            genre_conditions = " OR ".join("LOWER(genre) LIKE LOWER(?)" for _ in payload.genres)
+        normalized_genres = [_normalize_genre(genre) for genre in payload.genres]
+        normalized_genres = [genre for genre in normalized_genres if genre]
+        if normalized_genres:
+            genre_conditions = " OR ".join("(genre_normalized = ? OR genre_normalized LIKE ?)" for _ in normalized_genres)
             filters.append(f"({genre_conditions})")
-            for g in payload.genres:
-                params.append(f"%{g}%")
+            for normalized in normalized_genres:
+                params.extend([normalized, f"%{normalized}%"])
         where = " AND ".join(filters)
         params.append(payload.limit)
         with self.connection() as connection:
@@ -897,6 +972,19 @@ class Database:
             }
         )
 
+    def list_import_jobs(self) -> list[ImportDraftRecord]:
+        with self.connection() as connection:
+            rows = connection.execute("SELECT * FROM import_jobs ORDER BY id").fetchall()
+        return [
+            ImportDraftRecord.model_validate(
+                {
+                    **dict(row),
+                    "draft_payload": json.loads(row["draft_payload_json"]),
+                }
+            )
+            for row in rows
+        ]
+
     def update_import_job(
         self,
         draft_id: int,
@@ -915,6 +1003,11 @@ class Database:
                 (json.dumps(payload), chosen_source_url, status, utc_now_iso(), draft_id),
             )
         return self.get_import_job(draft_id)
+
+    def delete_import_job(self, draft_id: int) -> None:
+        self.get_import_job(draft_id)
+        with self.connection() as connection:
+            connection.execute("DELETE FROM import_jobs WHERE id = ?", (draft_id,))
 
     def _replace_tracks(self, connection: sqlite3.Connection, album_id: int, payload: AlbumUpsert) -> None:
         connection.execute("DELETE FROM tracks WHERE album_id = ?", (album_id,))

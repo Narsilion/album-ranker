@@ -8,6 +8,11 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+SHORT_TEXT_MAX = 500
+LONG_TEXT_MAX = 32_000
+URL_TEXT_MAX = 2_048
+
+
 def _strip_text(value: Any) -> Any:
     if isinstance(value, str):
         return value.strip()
@@ -43,7 +48,7 @@ def _require_text(value: str, field_name: str) -> str:
 
 class TrackUpsert(BaseModel):
     track_number: int = Field(ge=1)
-    title: str
+    title: str = Field(max_length=SHORT_TEXT_MAX)
     duration_seconds: int | None = Field(default=None, ge=0)
     position: int = Field(default=0, ge=0)
 
@@ -60,10 +65,10 @@ class TrackRecord(TrackUpsert):
 
 
 class ArtistUpsert(BaseModel):
-    name: str
-    description: str | None = None
-    external_url: str | None = None
-    origin: str | None = None
+    name: str = Field(max_length=SHORT_TEXT_MAX)
+    description: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
+    external_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+    origin: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
 
     @field_validator("name")
     @classmethod
@@ -90,19 +95,19 @@ class ArtistRecord(ArtistUpsert):
 
 
 class AlbumUpsert(BaseModel):
-    artist_name: str
-    artist_description: str | None = None
-    album_external_url: str | None = None
-    album_stream_url: str | None = None
-    album_type: str | None = None
-    title: str
+    artist_name: str = Field(max_length=SHORT_TEXT_MAX)
+    artist_description: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
+    album_external_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+    album_stream_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+    album_type: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
+    title: str = Field(max_length=SHORT_TEXT_MAX)
     release_year: int | None = Field(default=None, ge=1000, le=9999)
-    genre: str | None = None
+    genre: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
     rating: int | None = Field(default=None, ge=1, le=10)
     duration_seconds: int | None = Field(default=None, ge=0)
-    cover_image_path: str | None = None
-    cover_source_url: str | None = None
-    notes: str | None = None
+    cover_image_path: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+    cover_source_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+    notes: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
     tracks: list[TrackUpsert] = Field(default_factory=list)
 
     @field_validator("artist_name")
@@ -177,8 +182,8 @@ class ArtistWithAlbumsRecord(ArtistRecord):
 
 
 class AlbumListUpsert(BaseModel):
-    name: str
-    description: str | None = None
+    name: str = Field(max_length=SHORT_TEXT_MAX)
+    description: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
     year: int | None = Field(default=None, ge=1000, le=9999)
     genres: list[str] = Field(default_factory=list)
     is_auto: bool = False
@@ -229,7 +234,7 @@ class ReorderListItemsRequest(BaseModel):
 
 
 class AutoListBestRatedRequest(BaseModel):
-    name: str
+    name: str = Field(max_length=SHORT_TEXT_MAX)
     limit: int = Field(default=10, ge=1, le=500)
     year: int | None = Field(default=None, ge=1000, le=9999)
     genres: list[str] = Field(default_factory=list)
@@ -246,7 +251,7 @@ class AutoListBestRatedRequest(BaseModel):
 
 
 class GenreUpsert(BaseModel):
-    name: str
+    name: str = Field(max_length=SHORT_TEXT_MAX)
 
     @field_validator("name")
     @classmethod
@@ -264,6 +269,7 @@ class GenreRecord(GenreUpsert):
 class SettingsRecord(BaseModel):
     model: str
     active_model: str
+    writeup_model: str
     available_models: list[str] = Field(default_factory=list)
     openai_api_key_configured: bool = False
     ai_status: str = "key_missing"
@@ -275,47 +281,52 @@ class SettingsRecord(BaseModel):
 
 
 class SettingsUpdateRequest(BaseModel):
-    active_model: str
+    writeup_model: str | None = None
+    active_model: str | None = None
     theme: str = "dark"
+
+    @property
+    def selected_model(self) -> str:
+        return self.writeup_model or self.active_model or ""
 
 
 class ImportRequest(BaseModel):
-    artist_name: str = ""
-    album_title: str | None = None
-    source_url: str | None = None
+    artist_name: str = Field(default="", max_length=SHORT_TEXT_MAX)
+    album_title: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
+    source_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
 
 
 class RefreshAlbumRequest(BaseModel):
-    source_url: str | None = None
+    source_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
 
 
 class ImportTrackDraft(BaseModel):
     track_number: int = Field(ge=1)
-    title: str
+    title: str = Field(max_length=SHORT_TEXT_MAX)
     duration_seconds: int | None = Field(default=None, ge=0)
 
 
 class ArtistDraftData(BaseModel):
-    artist_name: str
-    description: str | None = None
-    external_url: str | None = None
-    origin: str | None = None
-    genre: str | None = None
+    artist_name: str = Field(max_length=SHORT_TEXT_MAX)
+    description: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
+    external_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+    origin: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
+    genre: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
 
 
 class AlbumDraftData(BaseModel):
-    artist_name: str
-    artist_description: str | None = None
-    album_external_url: str | None = None
-    album_stream_url: str | None = None
-    album_type: str | None = None
-    album_title: str
+    artist_name: str = Field(max_length=SHORT_TEXT_MAX)
+    artist_description: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
+    album_external_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+    album_stream_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+    album_type: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
+    album_title: str = Field(max_length=SHORT_TEXT_MAX)
     release_year: int | None = None
-    genre: str | None = None
+    genre: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
     rating: int | None = Field(default=None, ge=1, le=10)
     duration_seconds: int | None = None
-    cover_source_url: str | None = None
-    notes: str | None = None
+    cover_source_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+    notes: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
     tracks: list[ImportTrackDraft] = Field(default_factory=list)
 
 
@@ -372,16 +383,29 @@ class HealthResponse(BaseModel):
     now: datetime
 
 
-class OverviewDraftRequest(BaseModel):
+class WriteupDraftRequest(BaseModel):
     language: Literal["en", "ru"]
 
 
+class WriteupDraftResponse(BaseModel):
+    writeup: str = Field(max_length=LONG_TEXT_MAX)
+
+
+class WriteupSaveRequest(BaseModel):
+    writeup: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
+
+
+# Compatibility aliases for the existing database column and /overview API.
+class OverviewDraftRequest(WriteupDraftRequest):
+    pass
+
+
 class OverviewDraftResponse(BaseModel):
-    overview: str
+    overview: str = Field(max_length=LONG_TEXT_MAX)
 
 
 class OverviewSaveRequest(BaseModel):
-    overview: str | None = None
+    overview: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
 
 
 class RunStatusResponse(BaseModel):
@@ -431,19 +455,19 @@ def display_to_seconds(value: str | None) -> int | None:
 
 
 class AlbumFormPayload(BaseModel):
-    artist_name: str
-    artist_description: str | None = None
-    album_external_url: str | None = None
-    album_stream_url: str | None = None
-    title: str
+    artist_name: str = Field(max_length=SHORT_TEXT_MAX)
+    artist_description: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
+    album_external_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+    album_stream_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+    title: str = Field(max_length=SHORT_TEXT_MAX)
     release_year: int | None = Field(default=None, ge=1000, le=9999)
-    genre: str | None = None
+    genre: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
     rating: int | None = Field(default=None, ge=1, le=10)
     duration: str | None = None
-    cover_image_path: str | None = None
-    cover_source_url: str | None = None
-    notes: str | None = None
-    tracklist_text: str | None = None
+    cover_image_path: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+    cover_source_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+    notes: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
+    tracklist_text: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
 
     @field_validator("duration", mode="before")
     @classmethod
