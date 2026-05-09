@@ -27,14 +27,19 @@ class _FakeResponse:
     ("EXHALE THE PAST // INHALE THE FUTURE", "Exhale The Past // Inhale The Future"),
     ("LITTLE GIRL", "Little Girl"),
     ("PREDATOR", "Predator"),
+    ("black box", "Black box"),
+    ("don't wake me up", "Don't wake me up"),
+    ("if i were you", "If I were you"),
+    ("i need you (to be wrong)", "I need you (to be wrong)"),
+    ("(intro) a song", "(Intro) a song"),
     ("Burn The Ships", "Burn The Ships"),
     ("In Flames", "In Flames"),
     ("WYRD", "Wyrd"),
     ("", ""),
     ("ABCDEf", "ABCDEf"),
 ])
-def test_fix_allcaps(text: str, expected: str) -> None:
-    assert importer._fix_allcaps(text) == expected
+def test_fix_imported_title(text: str, expected: str) -> None:
+    assert importer._fix_imported_title(text) == expected
 
 
 # ── source fetch guardrails ───────────────────────────────────────────────────
@@ -476,7 +481,7 @@ def test_best_effort_artist_draft_parses_metal_archives_band_page(monkeypatch) -
     assert draft.genre == "Gothic Metal"
 
 
-def test_best_effort_artist_draft_uses_metal_archives_genre_when_no_meta_description(monkeypatch) -> None:
+def test_best_effort_artist_draft_keeps_metal_archives_genre_out_of_description(monkeypatch) -> None:
     html = """
     <html>
       <head>
@@ -502,7 +507,9 @@ def test_best_effort_artist_draft_uses_metal_archives_genre_when_no_meta_descrip
         )
     )
 
-    assert draft.description.startswith("Genre: Gothic Metal")
+    assert draft.genre == "Gothic Metal"
+    assert draft.description == "Status: Active"
+    assert "Genre:" not in draft.description
 
 
 def test_best_effort_artist_draft_extracts_description(monkeypatch) -> None:
@@ -522,6 +529,100 @@ def test_best_effort_artist_draft_extracts_description(monkeypatch) -> None:
 
     assert draft.artist_name == "Scythe of Mephisto"
     assert draft.description == "Scythe of Mephisto is a Serbian black metal project."
+
+
+def test_wikipedia_artist_draft_normalizes_origin_country_first(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <title>Halsey (singer) - Wikipedia</title>
+        <meta property="og:description" content="American singer and songwriter.">
+      </head>
+      <body>
+        <table class="infobox biography vcard">
+          <tr><th>Birthplace</th><td>Edison, New Jersey , US</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(
+            artist_name="Halsey",
+            source_url="https://en.wikipedia.org/wiki/Halsey_(singer)",
+        )
+    )
+
+    assert draft.origin == "United States, Edison, New Jersey"
+
+
+def test_wikipedia_artist_draft_normalizes_origin_from_born_field(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <title>Halsey (singer) - Wikipedia</title>
+      </head>
+      <body>
+        <table class="infobox biography vcard">
+          <tr><th>Born</th><td>Ashley Nicolette Frangipane September 29, 1994 (age 31) Edison, New Jersey, U.S.</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(
+            artist_name="Halsey",
+            source_url="https://en.wikipedia.org/wiki/Halsey_(singer)",
+        )
+    )
+
+    assert draft.origin == "United States, Edison, New Jersey"
+
+
+def test_wikipedia_artist_draft_formats_genre_list(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <title>Switchfoot - Wikipedia</title>
+        <meta property="og:description" content="American alternative rock band.">
+      </head>
+      <body>
+        <table class="infobox vcard">
+          <tr><th>Genres</th><td>
+            <div class="hlist">
+              <ul>
+                <li><a>Alternative rock</a><sup>[1]</sup></li>
+                <li><a>Art rock</a><sup>[2]</sup></li>
+                <li><a>post-grunge</a><sup>[1]</sup></li>
+                <li><a>indie rock</a><sup>[3]</sup></li>
+                <li><a>gospel</a><sup>[1]</sup></li>
+                <li><a>power pop</a><sup>[4]</sup></li>
+                <li><a>pop rock</a><sup>[1]</sup></li>
+                <li><a>post-punk</a><sup>[4]</sup></li>
+                <li><a>punk rock</a><sup>[5]</sup></li>
+              </ul>
+            </div>
+          </td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(
+            artist_name="Switchfoot",
+            source_url="https://en.wikipedia.org/wiki/Switchfoot",
+        )
+    )
+
+    assert draft.genre == (
+        "Alternative Rock / Art Rock / Post-Grunge / Indie Rock / Gospel / "
+        "Power Pop / Pop Rock / Post-Punk / Punk Rock"
+    )
 
 
 def test_best_effort_artist_draft_can_infer_name_from_page_title(monkeypatch) -> None:
@@ -702,6 +803,211 @@ def test_ytm_album_draft_uses_ytm_page_tracks_not_playlist_page(monkeypatch) -> 
     assert draft.tracks[7].duration_seconds == 728
     # Total duration should be sum of all tracks
     assert draft.duration_seconds == sum(t.duration_seconds for t in draft.tracks if t.duration_seconds)
+
+
+def test_ytm_album_draft_sentence_cases_lowercase_track_titles(monkeypatch) -> None:
+    og_html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Album - Album by Band">
+      </head>
+    </html>
+    """
+    import json as _json
+
+    tracklist_obj = {
+        "musicShelfRenderer": {
+            "contents": [
+                {"musicResponsiveListItemRenderer": _make_ytm_renderer("black box", "3:00")},
+                {"musicResponsiveListItemRenderer": _make_ytm_renderer("don't wake me up", "4:00")},
+                {"musicResponsiveListItemRenderer": _make_ytm_renderer("if i were you", "4:30")},
+                {"musicResponsiveListItemRenderer": _make_ytm_renderer("Already Sentence Case", "5:00")},
+            ]
+        }
+    }
+
+    def _hex_encode(obj: dict) -> str:
+        raw = _json.dumps(obj).replace("/", "\\/")
+        return "".join(f"\\x{ord(c):02x}" for c in raw)
+
+    ytm_page = f"initialData.push({{data: '{_hex_encode(tracklist_obj)}'}});\n"
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (og_html, "text/html"))
+    monkeypatch.setattr(importer, "_fetch_ytm_full_page", lambda url: ytm_page)
+
+    draft = importer._best_effort_album_draft(
+        ImportRequest(
+            artist_name="",
+            source_url="https://music.youtube.com/playlist?list=OLAK5uy_lowercase",
+        )
+    )
+
+    assert [track.title for track in draft.tracks] == [
+        "Black box",
+        "Don't wake me up",
+        "If I were you",
+        "Already Sentence Case",
+    ]
+
+
+def test_ytm_watch_album_draft_resolves_full_album(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Nobody But You Baby">
+        <meta property="og:description" content="The Black Keys">
+        <meta property="og:image" content="https://yt3.googleusercontent.com/cover.jpg">
+      </head>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+    monkeypatch.setattr(
+        importer,
+        "_fetch_ytm_full_page",
+        lambda url: '"INNERTUBE_API_KEY":"test-key","INNERTUBE_CLIENT_VERSION":"1.20260505.09.00"',
+    )
+
+    def fake_ytm_api(endpoint: str, payload: dict, api_key: str) -> dict:
+        if endpoint == "next":
+            return {
+                "contents": {
+                    "playlistPanelVideoRenderer": {
+                        "longBylineText": {
+                            "runs": [
+                                {"text": "The Black Keys"},
+                                {"text": " • "},
+                                {
+                                    "text": "Peaches!",
+                                    "navigationEndpoint": {
+                                        "browseEndpoint": {
+                                            "browseId": "MPREb_9tCUsvsZddw",
+                                            "browseEndpointContextSupportedConfigs": {
+                                                "browseEndpointContextMusicConfig": {
+                                                    "pageType": "MUSIC_PAGE_TYPE_ALBUM",
+                                                }
+                                            },
+                                        }
+                                    },
+                                },
+                                {"text": " • "},
+                                {"text": "2026"},
+                            ]
+                        }
+                    }
+                }
+            }
+        if endpoint == "browse":
+            return {
+                "microformat": {
+                    "microformatDataRenderer": {
+                        "urlCanonical": "https://music.youtube.com/playlist?list=OLAK5uy_lC_wziTi5fDBlkEqSexaVeCxLgliVcWtA",
+                        "title": "Peaches! - Album by The Black Keys",
+                        "description": "Album description.",
+                        "thumbnail": {"thumbnails": [{"url": "https://yt3.googleusercontent.com/cover.jpg", "width": 544, "height": 544}]},
+                    }
+                },
+                "contents": {
+                    "musicShelfRenderer": {
+                        "contents": [
+                            {"musicResponsiveListItemRenderer": _make_ytm_renderer("Where There's Smoke, There's Fire", "5:01")},
+                            {"musicResponsiveListItemRenderer": _make_ytm_renderer("Stop Arguing Over Me", "4:02")},
+                            {"musicResponsiveListItemRenderer": _make_ytm_renderer("Who's Been Foolin' You", "4:17")},
+                            {"musicResponsiveListItemRenderer": _make_ytm_renderer("It's a Dream", "3:36")},
+                            {"musicResponsiveListItemRenderer": _make_ytm_renderer("Tomorrow Night", "3:55")},
+                            {"musicResponsiveListItemRenderer": _make_ytm_renderer("You Got to Lose", "3:17")},
+                            {"musicResponsiveListItemRenderer": _make_ytm_renderer("Tell Me You Love Me", "4:27")},
+                            {"musicResponsiveListItemRenderer": _make_ytm_renderer("She Does It Right", "3:43")},
+                            {"musicResponsiveListItemRenderer": _make_ytm_renderer("Fireman Ring the Bell", "5:47")},
+                            {"musicResponsiveListItemRenderer": _make_ytm_renderer("Nobody But You Baby", "7:14")},
+                        ]
+                    },
+                    "subtitle": {"runs": [{"text": "Album"}, {"text": " • "}, {"text": "2026"}]},
+                },
+            }
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(importer, "_fetch_ytm_api", fake_ytm_api)
+
+    draft = importer._best_effort_album_draft(
+        ImportRequest(
+            artist_name="",
+            source_url="https://music.youtube.com/watch?v=4pWSqz0EZS0&si=w64uCCNQCJmS522Q",
+        )
+    )
+
+    assert draft.album_title == "Peaches!"
+    assert draft.artist_name == "The Black Keys"
+    assert draft.album_type == "Full-length"
+    assert draft.release_year == 2026
+    assert draft.album_external_url == "https://music.youtube.com/playlist?list=OLAK5uy_lC_wziTi5fDBlkEqSexaVeCxLgliVcWtA"
+    assert len(draft.tracks) == 10
+    assert draft.tracks[0].title == "Where There's Smoke, There's Fire"
+    assert draft.tracks[9].title == "Nobody But You Baby"
+    assert draft.tracks[9].duration_seconds == 434
+
+
+def test_ytm_artist_draft_does_not_use_album_description(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Trying: Season 3 (Apple TV Original Series Soundtrack) - Album by Bear's Den">
+        <meta property="og:description" content="Listen to Trying: Season 3 (Apple TV Original Series Soundtrack) by Bear's Den on YouTube Music - a dedicated music app with official songs, music videos, remixes, covers, and more.">
+      </head>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(
+            artist_name="",
+            source_url="https://music.youtube.com/playlist?list=OLAK5uy_kh5TKNaYuY9PNFOHik4DO7KyHKBAREDxc",
+        )
+    )
+
+    assert draft.artist_name == "Bear's Den"
+    assert draft.description is None
+    assert draft.external_url == "https://music.youtube.com/playlist?list=OLAK5uy_kh5TKNaYuY9PNFOHik4DO7KyHKBAREDxc"
+
+
+def test_ytm_watch_artist_draft_uses_description_as_artist(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Nobody But You Baby">
+        <meta property="og:description" content="The Black Keys">
+      </head>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(
+            artist_name="",
+            source_url="https://music.youtube.com/watch?v=4pWSqz0EZS0&si=w64uCCNQCJmS522Q",
+        )
+    )
+
+    assert draft.artist_name == "The Black Keys"
+    assert draft.description is None
+
+
+def test_ytm_artist_draft_uses_artist_page_description(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Bear's Den - YouTube Music">
+        <meta property="og:description" content="Bear's Den are a British folk rock band from London.">
+      </head>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(source_url="https://music.youtube.com/@bearsdenmusic")
+    )
+
+    assert draft.artist_name == "Bear's Den"
+    assert draft.description == "Bear's Den are a British folk rock band from London."
+    assert draft.external_url == "https://music.youtube.com/@bearsdenmusic"
 
 
 def test_alterportal_album_draft_parses_page(monkeypatch) -> None:

@@ -1630,6 +1630,191 @@ def test_album_with_existing_artist_import_skips_artist_draft(client, monkeypatc
     assert body["album_draft"]["draft_payload"]["artist_name"] == "For My Pain..."
 
 
+def test_album_with_artist_import_does_not_copy_ytm_album_description_to_artist(settings, monkeypatch) -> None:
+    import album_ranker.importer as importer_module
+
+    source_url = "https://music.youtube.com/playlist?list=OLAK5uy_kh5TKNaYuY9PNFOHik4DO7KyHKBAREDxc"
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Trying: Season 3 (Apple TV Original Series Soundtrack) - Album by Bear's Den">
+        <meta property="og:description" content="Listen to Trying: Season 3 (Apple TV Original Series Soundtrack) by Bear's Den on YouTube Music - a dedicated music app with official songs, music videos, remixes, covers, and more.">
+      </head>
+    </html>
+    """
+    monkeypatch.setattr(importer_module, "_fetch_url_document", lambda url: (html, "text/html"))
+    monkeypatch.setattr(importer_module, "_fetch_ytm_full_page", lambda url: "")
+    monkeypatch.setattr(importer_module, "_extract_yt_playlist_tracks", lambda playlist_id: [])
+    app = create_app(settings, importer=MetadataImporter(client=None), cover_downloader=CoverDownloader(settings.cover_dir))
+    local_client = TestClient(app)
+
+    response = local_client.post(
+        "/api/import/album-with-artist",
+        json={"artist_name": "", "album_title": None, "source_url": source_url},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["album_draft"]["draft_payload"]["artist_name"] == "Bear's Den"
+    assert body["artist_draft"]["draft_payload"]["artist_name"] == "Bear's Den"
+    assert body["artist_draft"]["draft_payload"]["description"] is None
+
+
+def test_album_with_artist_import_resolves_ytm_watch_to_full_album(settings, monkeypatch) -> None:
+    import album_ranker.importer as importer_module
+
+    source_url = "https://music.youtube.com/watch?v=4pWSqz0EZS0&si=w64uCCNQCJmS522Q"
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Nobody But You Baby">
+        <meta property="og:description" content="The Black Keys">
+        <meta property="og:image" content="https://yt3.googleusercontent.com/cover.jpg">
+      </head>
+    </html>
+    """
+    monkeypatch.setattr(importer_module, "_fetch_url_document", lambda url: (html, "text/html"))
+    monkeypatch.setattr(
+        importer_module,
+        "_fetch_ytm_full_page",
+        lambda url: '"INNERTUBE_API_KEY":"test-key","INNERTUBE_CLIENT_VERSION":"1.20260505.09.00"',
+    )
+
+    def renderer(title: str, duration: str) -> dict:
+        return {
+            "musicResponsiveListItemRenderer": {
+                "flexColumns": [
+                    {"musicResponsiveListItemFlexColumnRenderer": {"text": {"runs": [{"text": title}]}}},
+                ],
+                "fixedColumns": [
+                    {"musicResponsiveListItemFixedColumnRenderer": {"text": {"runs": [{"text": duration}]}}},
+                ],
+            }
+        }
+
+    def fake_ytm_api(endpoint: str, payload: dict, api_key: str) -> dict:
+        if endpoint == "next":
+            return {
+                "contents": {
+                    "playlistPanelVideoRenderer": {
+                        "longBylineText": {
+                            "runs": [
+                                {"text": "The Black Keys"},
+                                {"text": " • "},
+                                {
+                                    "text": "Peaches!",
+                                    "navigationEndpoint": {
+                                        "browseEndpoint": {
+                                            "browseId": "MPREb_9tCUsvsZddw",
+                                            "browseEndpointContextSupportedConfigs": {
+                                                "browseEndpointContextMusicConfig": {
+                                                    "pageType": "MUSIC_PAGE_TYPE_ALBUM",
+                                                }
+                                            },
+                                        }
+                                    },
+                                },
+                            ]
+                        }
+                    }
+                }
+            }
+        if endpoint == "browse":
+            return {
+                "microformat": {
+                    "microformatDataRenderer": {
+                        "urlCanonical": "https://music.youtube.com/playlist?list=OLAK5uy_lC_wziTi5fDBlkEqSexaVeCxLgliVcWtA",
+                        "title": "Peaches! - Album by The Black Keys",
+                        "thumbnail": {"thumbnails": [{"url": "https://yt3.googleusercontent.com/cover.jpg", "width": 544, "height": 544}]},
+                    }
+                },
+                "contents": {
+                    "musicShelfRenderer": {
+                        "contents": [
+                            renderer("Where There's Smoke, There's Fire", "5:01"),
+                            renderer("Stop Arguing Over Me", "4:02"),
+                            renderer("Who's Been Foolin' You", "4:17"),
+                            renderer("It's a Dream", "3:36"),
+                            renderer("Tomorrow Night", "3:55"),
+                            renderer("You Got to Lose", "3:17"),
+                            renderer("Tell Me You Love Me", "4:27"),
+                            renderer("She Does It Right", "3:43"),
+                            renderer("Fireman Ring the Bell", "5:47"),
+                            renderer("Nobody But You Baby", "7:14"),
+                        ]
+                    },
+                    "subtitle": {"runs": [{"text": "Album"}, {"text": " • "}, {"text": "2026"}]},
+                },
+            }
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(importer_module, "_fetch_ytm_api", fake_ytm_api)
+    app = create_app(settings, importer=MetadataImporter(client=None), cover_downloader=CoverDownloader(settings.cover_dir))
+    local_client = TestClient(app)
+
+    response = local_client.post(
+        "/api/import/album-with-artist",
+        json={"artist_name": "", "album_title": None, "source_url": source_url},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["album_draft"]["draft_payload"]["album_title"] == "Peaches!"
+    assert body["album_draft"]["draft_payload"]["artist_name"] == "The Black Keys"
+    assert body["album_draft"]["draft_payload"]["album_type"] == "Full-length"
+    assert len(body["album_draft"]["draft_payload"]["tracks"]) == 10
+    assert body["album_draft"]["chosen_source_url"] == "https://music.youtube.com/playlist?list=OLAK5uy_lC_wziTi5fDBlkEqSexaVeCxLgliVcWtA"
+    assert body["artist_draft"]["draft_payload"]["artist_name"] == "The Black Keys"
+    assert body["artist_draft"]["draft_payload"]["description"] is None
+
+
+def test_album_with_artist_import_uses_supplied_ytm_artist_source_url(settings, monkeypatch) -> None:
+    import album_ranker.importer as importer_module
+
+    album_url = "https://music.youtube.com/playlist?list=OLAK5uy_kh5TKNaYuY9PNFOHik4DO7KyHKBAREDxc"
+    artist_url = "https://music.youtube.com/@bearsdenmusic"
+    album_html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Trying: Season 3 (Apple TV Original Series Soundtrack) - Album by Bear's Den">
+      </head>
+    </html>
+    """
+    artist_html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Bear's Den - YouTube Music">
+        <meta property="og:description" content="Bear's Den are a British folk rock band from London.">
+      </head>
+    </html>
+    """
+
+    def fake_fetch(url: str) -> tuple[str, str]:
+        if url == album_url:
+            return album_html, "text/html"
+        if url == artist_url:
+            return artist_html, "text/html"
+        raise AssertionError(f"unexpected URL: {url}")
+
+    monkeypatch.setattr(importer_module, "_fetch_url_document", fake_fetch)
+    monkeypatch.setattr(importer_module, "_fetch_ytm_full_page", lambda url: "")
+    monkeypatch.setattr(importer_module, "_extract_yt_playlist_tracks", lambda playlist_id: [])
+    app = create_app(settings, importer=MetadataImporter(client=None), cover_downloader=CoverDownloader(settings.cover_dir))
+    local_client = TestClient(app)
+
+    response = local_client.post(
+        "/api/import/album-with-artist",
+        json={"artist_name": "", "album_title": None, "source_url": album_url, "artist_source_url": artist_url},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["artist_source_url"] == artist_url
+    assert body["artist_draft"]["draft_payload"]["artist_name"] == "Bear's Den"
+    assert body["artist_draft"]["draft_payload"]["description"] == "Bear's Den are a British folk rock band from London."
+    assert body["artist_draft"]["draft_payload"]["external_url"] == artist_url
+
+
 def test_album_with_artist_confirm_creates_artist_and_album(client, monkeypatch) -> None:
     import album_ranker.app as app_module
 
@@ -1759,7 +1944,11 @@ def test_imports_page_renders_bundle_flow(client) -> None:
     assert "Album Draft" in page.text
     assert "album.genre || artistGenre" in page.text
     assert 'id="bundleArtistName" name="artist_name" required disabled' in page.text
+    assert "confirmForm.dataset.existingAlbumId = response.existing_album?.id ||" in page.text
+    assert "response.album_exists" in page.text
+    assert 'fetchJson(`/api/albums/${existingAlbumId}`' in page.text
     assert "setArtistDraftEnabled(Boolean(artistDraft))" in page.text
+    assert 'id="albumWithArtistArtistSourceUrl" name="artist_source_url"' in page.text
     assert 'value("bundleArtistDraftId")' in page.text
     assert "Please provide a proper Metal Archives album URL" in page.text
     assert "Use the album page URL" in page.text

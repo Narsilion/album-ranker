@@ -22,7 +22,7 @@ class FakeImporter(MetadataImporter):
     def create_artist_draft(self, request: ImportRequest, *, model: str):  # type: ignore[override]
         return ArtistDraftData(
             artist_name=request.artist_name or "For My Pain...",
-            description="Genre: Gothic Metal\nA precise artist description",
+            description="A precise artist description",
             external_url=request.source_url or "https://example.com/artist",
             origin="Finland, Oulu",
             genre="Gothic Metal",

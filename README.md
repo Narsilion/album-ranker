@@ -65,7 +65,16 @@ Important:
 - ignore `build/lib/album_ranker/`; it is generated output
 - app data lives under `.data/` by default
 
-## Setup
+## Local Setup
+
+This repo is normally run from the existing local `.venv`.
+
+```bash
+cd /Users/darkcreation/Documents/git_repos/album-ranker
+source .venv/bin/activate
+```
+
+Only create a new virtual environment when setting up a fresh checkout or intentionally rebuilding the environment.
 
 ```bash
 cd /Users/darkcreation/Documents/git_repos/album-ranker

@@ -294,6 +294,7 @@ class ImportRequest(BaseModel):
     artist_name: str = Field(default="", max_length=SHORT_TEXT_MAX)
     album_title: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
     source_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+    artist_source_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
 
 
 class RefreshAlbumRequest(BaseModel):

@@ -510,23 +510,6 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         object-fit: cover;
         display: block;
       }}
-      .cover-upload-overlay {{
-        position: absolute;
-        inset: 0;
-        background: rgba(0,0,0,0.55);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        opacity: 0;
-        transition: opacity 0.15s;
-        border-radius: 22px;
-        font-size: 13px;
-        color: #fff;
-        pointer-events: none;
-      }}
-      .cover:hover .cover-upload-overlay {{
-        opacity: 1;
-      }}
       .cover-bookmark-btn,
       .cover-listened-btn {{
         position: absolute;
@@ -830,6 +813,28 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         letter-spacing: 0.12em;
         text-transform: uppercase;
       }}
+      .artist-origin-meta {{
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-width: 0;
+        padding: 7px 11px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--ink);
+        font-size: 13px;
+      }}
+      .artist-origin-meta .meta-item-label {{
+        display: inline;
+        margin: 0;
+        font-size: 10px;
+      }}
+      .artist-hero-meta {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+      }}
       .tracklist {{
         display: grid;
         gap: 8px;
@@ -985,9 +990,6 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         .cover-frame .cover-listened-btn {{
           width: 38px;
           height: 38px;
-          opacity: 1;
-        }}
-        .cover-upload-overlay {{
           opacity: 1;
         }}
       }}
@@ -2034,11 +2036,17 @@ def render_artist_detail_page(
         if artist.external_url
         else ""
     )
+    origin_meta = (
+        f'<div class="artist-origin-meta"><span class="meta-item-label">Origin</span><span>{_escape(artist.origin)}</span></div>'
+        if artist.origin
+        else ""
+    )
     clamp_id = f"artist-detail-description-{artist.id}"
     body = f"""
       <section class="hero">
         <div class="eyebrow">Artist</div>
         <h1>{_escape(artist.name)}</h1>
+        {f'<div class="artist-hero-meta">{origin_meta}</div>' if origin_meta else ''}
         <p>Open the artist library view, import albums in artist context, and keep the catalog grouped under the right record.</p>
       </section>
       <section class="panel" style="margin-top:20px;">
@@ -2051,7 +2059,6 @@ def render_artist_detail_page(
         </div>
         <div id="{clamp_id}" class="clamp muted">{_escape(artist.description or 'No description yet.')}</div>
         <button type="button" class="toggle-link" data-toggle-clamp="{clamp_id}" aria-controls="{clamp_id}" aria-expanded="false">MORE</button>
-        {f'<div class="meta-item" style="margin-top:10px; display:inline-block;"><span class="meta-item-label">Origin</span>{_escape(artist.origin)}</div>' if artist.origin else ''}
         <div class="meta-stack" style="margin-top:14px; width:100%;">
           <button type="button" id="artistEditToggle" class="secondary" style="margin-bottom:8px;" aria-controls="artistEditPanel" aria-expanded="false">Edit Artist Metadata</button>
           <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px; width:100%; max-width:none; justify-self:stretch;">
@@ -2666,6 +2673,13 @@ def render_imports_page(settings: SettingsRecord) -> str:
               Use the album page URL, for example https://www.metal-archives.com/albums/For_My_Pain.../Buried_Blue/1391127
             </div>
           </div>
+          <div class="form-field">
+            <label class="form-label" for="albumWithArtistArtistSourceUrl">Artist Page URL</label>
+            <div class="input-clear-wrap">
+              <input id="albumWithArtistArtistSourceUrl" name="artist_source_url" placeholder="https://music.youtube.com/@artist">
+              <button type="button" class="input-clear-btn" aria-label="Clear">&#x2715;</button>
+            </div>
+          </div>
           <div class="row">
             <button type="submit" id="albumWithArtistSubmitBtn">Create Drafts</button>
             <button type="button" id="albumWithArtistCancelBtn" class="secondary hidden">Cancel</button>
@@ -2679,7 +2693,7 @@ def render_imports_page(settings: SettingsRecord) -> str:
           <input type="hidden" id="bundleAlbumDraftId" name="album_draft_id">
           <input type="hidden" id="bundleArtistDraftId" name="artist_draft_id">
           <input type="hidden" id="bundleAlbumArtistName" name="album_artist_name">
-          <div id="albumWithArtistExistingNotice" class="hidden" style="margin-bottom:14px; padding:10px 12px; background:rgba(46,168,124,0.12); border:1px solid rgba(46,168,124,0.32); border-radius:6px;">
+          <div id="albumWithArtistExistingNotice" class="hidden" data-artist-message="Artist already exists. This import will attach the album to the existing artist." data-album-message="Album already exists. Confirming will update the existing album." style="margin-bottom:14px; padding:10px 12px; background:rgba(46,168,124,0.12); border:1px solid rgba(46,168,124,0.32); border-radius:6px;">
             Artist already exists. This import will attach the album to the existing artist.
           </div>
           <div id="albumWithArtistArtistDraft" class="draft hidden" style="margin-bottom:16px;">
@@ -2793,12 +2807,33 @@ def render_imports_page(settings: SettingsRecord) -> str:
           sync();
         });
         function fillBundleDrafts(response) {
+          confirmForm.dataset.existingAlbumId = response.existing_album?.id || "";
           const albumDraft = response.album_draft;
-          const album = albumDraft.draft_payload || {};
+          if (!albumDraft && !response.existing_album) {
+            throw new Error("Import did not return an album draft.");
+          }
+          const album = albumDraft
+            ? (albumDraft.draft_payload || {})
+            : {
+                artist_name: response.existing_album.artist_name,
+                album_title: response.existing_album.title,
+                release_year: response.existing_album.release_year,
+                duration_seconds: response.existing_album.duration_seconds,
+                genre: response.existing_album.genre,
+                album_type: response.existing_album.album_type,
+                album_external_url: response.existing_album.album_external_url,
+                album_stream_url: response.existing_album.album_stream_url,
+                cover_source_url: response.existing_album.cover_source_url,
+                notes: response.existing_album.notes,
+                tracks: response.existing_album.tracks || [],
+              };
           const artistDraft = response.artist_draft;
-          setValue("bundleAlbumDraftId", albumDraft.id);
+          setValue("bundleAlbumDraftId", albumDraft ? albumDraft.id : "");
           setValue("bundleArtistDraftId", artistDraft ? artistDraft.id : "");
-          existingNotice.classList.toggle("hidden", !response.artist_exists);
+          existingNotice.textContent = response.album_exists
+            ? existingNotice.dataset.albumMessage
+            : existingNotice.dataset.artistMessage;
+          existingNotice.classList.toggle("hidden", !(response.artist_exists || response.album_exists));
           artistDraftPanel.classList.toggle("hidden", !artistDraft);
           setArtistDraftEnabled(Boolean(artistDraft));
           let artistGenre = "";
@@ -2864,6 +2899,7 @@ def render_imports_page(settings: SettingsRecord) -> str:
         });
         document.getElementById("albumWithArtistReset").addEventListener("click", () => {
           confirmForm.reset();
+          confirmForm.dataset.existingAlbumId = "";
           reviewPanel.classList.add("hidden");
           artistDraftPanel.classList.add("hidden");
           setArtistDraftEnabled(false);
@@ -2876,8 +2912,10 @@ def render_imports_page(settings: SettingsRecord) -> str:
           const submitBtn = document.getElementById("albumWithArtistSubmitBtn");
           const cancelBtn = document.getElementById("albumWithArtistCancelBtn");
           let sourceUrl = "";
+          let artistSourceUrl = null;
           try {
             sourceUrl = validateMetalArchivesAlbumUrl(document.getElementById("albumWithArtistSourceUrl").value);
+            artistSourceUrl = validateUrl(document.getElementById("albumWithArtistArtistSourceUrl").value, "Artist page URL");
           } catch (err) {
             status.textContent = err.message;
             return;
@@ -2894,10 +2932,13 @@ def render_imports_page(settings: SettingsRecord) -> str:
                 artist_name: "",
                 album_title: null,
                 source_url: sourceUrl,
+                artist_source_url: artistSourceUrl,
               }),
             });
             fillBundleDrafts(response);
-            status.textContent = response.artist_draft ? "Album and artist drafts ready." : "Album draft ready.";
+            status.textContent = response.album_exists
+              ? "Existing album ready to update."
+              : (response.artist_draft ? "Album and artist drafts ready." : "Album draft ready.");
           } catch (err) {
             status.textContent = err.name === "AbortError" ? "Cancelled." : (err.message || "Import failed.");
           } finally {
@@ -2910,21 +2951,30 @@ def render_imports_page(settings: SettingsRecord) -> str:
           event.preventDefault();
           confirmStatus.textContent = "Saving import...";
           try {
-            const result = await fetchJson("/api/import/album-with-artist/confirm", {
-              method: "POST",
-              body: JSON.stringify({
-                album_draft_id: Number(value("bundleAlbumDraftId")),
-                album_payload: albumPayload(),
-                album_chosen_source_url: value("bundleAlbumExternalUrl") || null,
-                artist_draft_id: value("bundleArtistDraftId") ? Number(value("bundleArtistDraftId")) : null,
-                artist_payload: artistPayload(),
-                artist_chosen_source_url: value("bundleArtistExternalUrl") || null,
-              }),
-            });
-            if (result?.album?.id) {
-              window.location.href = `/albums/${result.album.id}`;
+            const existingAlbumId = confirmForm.dataset.existingAlbumId;
+            if (existingAlbumId) {
+              const album = await fetchJson(`/api/albums/${existingAlbumId}`, {
+                method: "PUT",
+                body: JSON.stringify(albumPayload()),
+              });
+              window.location.href = `/albums/${album.id}`;
             } else {
-              window.location.href = "/albums";
+              const result = await fetchJson("/api/import/album-with-artist/confirm", {
+                method: "POST",
+                body: JSON.stringify({
+                  album_draft_id: Number(value("bundleAlbumDraftId")),
+                  album_payload: albumPayload(),
+                  album_chosen_source_url: value("bundleAlbumExternalUrl") || null,
+                  artist_draft_id: value("bundleArtistDraftId") ? Number(value("bundleArtistDraftId")) : null,
+                  artist_payload: artistPayload(),
+                  artist_chosen_source_url: value("bundleArtistExternalUrl") || null,
+                }),
+              });
+              if (result?.album?.id) {
+                window.location.href = `/albums/${result.album.id}`;
+              } else {
+                window.location.href = "/albums";
+              }
             }
           } catch (err) {
             confirmStatus.textContent = err.message || "Save failed.";
@@ -3097,9 +3147,8 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
       </section>
       <section class="detail-layout">
         <div>
-          <label class="cover" for="coverFileInput" title="{cover_action_title}">
+          <label class="cover" for="coverFileInput" title="{cover_action_title}" aria-label="{cover_action_label}">
             <img id="coverImg" src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover">
-            <div class="cover-upload-overlay" id="coverUploadOverlay">&#128247; {cover_action_label}</div>
           </label>
           <input type="file" id="coverFileInput" accept="image/jpeg,image/png,image/webp" style="display:none;">
           <div class="star-widget">

@@ -150,6 +150,22 @@ def _host_label(url: str | None) -> str | None:
     return parsed.netloc or None
 
 
+def _is_youtube_music_album_source_url(url: str | None) -> bool:
+    if not url:
+        return False
+    parsed = urlparse(url)
+    return "music.youtube.com" in parsed.netloc and (
+        parsed.path.startswith("/playlist") or parsed.path.startswith("/watch") or "list=" in parsed.query
+    )
+
+
+def _is_youtube_music_watch_url(url: str | None) -> bool:
+    if not url:
+        return False
+    parsed = urlparse(url)
+    return "music.youtube.com" in parsed.netloc and parsed.path.startswith("/watch")
+
+
 def _extract_title(html: str) -> str | None:
     match = re.search(r"(?is)<title[^>]*>(.*?)</title>", html)
     if not match:
@@ -158,14 +174,14 @@ def _extract_title(html: str) -> str | None:
 
 
 def _extract_meta_content(html: str, key: str, *, attr: str = "property") -> str | None:
-    pattern = rf'(?is)<meta[^>]+{attr}\s*=\s*["\']{re.escape(key)}["\'][^>]+content\s*=\s*["\'](.*?)["\']'
+    pattern = rf'(?is)<meta[^>]+{attr}\s*=\s*["\']{re.escape(key)}["\'][^>]+content\s*=\s*(["\'])(.*?)\1'
     match = re.search(pattern, html)
     if match:
-        return _strip_html(match.group(1)) or None
-    reverse_pattern = rf'(?is)<meta[^>]+content\s*=\s*["\'](.*?)["\'][^>]+{attr}\s*=\s*["\']{re.escape(key)}["\']'
+        return _strip_html(match.group(2)) or None
+    reverse_pattern = rf'(?is)<meta[^>]+content\s*=\s*(["\'])(.*?)\1[^>]+{attr}\s*=\s*["\']{re.escape(key)}["\']'
     match = re.search(reverse_pattern, html)
     if match:
-        return _strip_html(match.group(1)) or None
+        return _strip_html(match.group(2)) or None
     return None
 
 
@@ -367,7 +383,6 @@ def _metal_archives_artist_draft(request: ImportRequest, html: str, metadata: di
         formed = details.get("Formed in")
         status = details.get("Status")
         description_parts = [
-            f"Genre: {genre}" if genre else "",
             f"Formed in: {formed}" if formed else "",
             f"Status: {status}" if status else "",
         ]
@@ -476,7 +491,10 @@ def _extract_wikipedia_infobox(html: str) -> dict[str, Any]:
         tds = re.findall(r'(?is)<td[^>]*>(.*?)</td>', row)
         if len(ths) == 1 and len(tds) == 1:
             key = _html_unescape(_strip_html(ths[0])).strip().rstrip(":")
-            val = _html_unescape(_strip_html(tds[0])).strip()
+            if key in {"Genre", "Genres"}:
+                val = _normalize_wikipedia_genres_from_html(tds[0]) or _html_unescape(_strip_html(tds[0])).strip()
+            else:
+                val = _html_unescape(_strip_html(tds[0])).strip()
             if key and val:
                 values[key] = val
         for th_content in ths:
@@ -492,6 +510,39 @@ def _extract_wikipedia_infobox(html: str) -> dict[str, Any]:
             src = "https:" + src
         values["_cover"] = src
     return values
+
+
+def _titlecase_genre(value: str) -> str:
+    words = []
+    for word in value.split():
+        pieces = [piece.capitalize() for piece in word.split("-")]
+        words.append("-".join(pieces))
+    return " ".join(words)
+
+
+def _normalize_wikipedia_genres_from_html(html: str) -> str | None:
+    clean = re.sub(r"(?is)<sup[^>]*>.*?</sup>", "", html)
+    items = re.findall(r"(?is)<li[^>]*>(.*?)</li>", clean)
+    if not items:
+        clean = re.sub(r"(?is)<br\s*/?>", "\n", clean)
+        clean = re.sub(r"(?is)</(?:div|span|p)>", "\n", clean)
+        items = clean.splitlines()
+
+    genres: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = _html_unescape(_strip_html(item)).strip()
+        text = re.sub(r"\[\s*\d+\s*\]", "", text)
+        text = re.sub(r"\s+", " ", text).strip(" ,;/")
+        if not text:
+            continue
+        for part in re.split(r"\s*(?:/|,|;)\s*", text):
+            genre = _titlecase_genre(part.strip())
+            key = genre.lower()
+            if genre and key not in seen:
+                genres.append(genre)
+                seen.add(key)
+    return " / ".join(genres) if genres else None
 
 
 def _extract_wikipedia_tracks(html: str) -> list[dict[str, Any]]:
@@ -659,6 +710,232 @@ def _runs_text(runs_obj: Any) -> str:
     return ""
 
 
+def _ytm_text(obj: Any) -> str:
+    if isinstance(obj, dict):
+        return _runs_text(obj)
+    return ""
+
+
+def _ytm_thumbnail_url(obj: Any) -> str | None:
+    if not isinstance(obj, dict):
+        return None
+    thumbnails = obj.get("thumbnails")
+    if isinstance(thumbnails, list) and thumbnails:
+        candidates = [thumb for thumb in thumbnails if isinstance(thumb, dict) and thumb.get("url")]
+        if candidates:
+            best = max(candidates, key=lambda thumb: int(thumb.get("width") or 0) * int(thumb.get("height") or 0))
+            return str(best.get("url") or "") or None
+    for thumbnail in _find_all_by_key(obj, "thumbnail"):
+        if isinstance(thumbnail, dict):
+            url = _ytm_thumbnail_url(thumbnail)
+            if url:
+                return url
+    return None
+
+
+def _ytm_api_config(raw: str) -> tuple[str | None, str]:
+    api_key_m = re.search(r'"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"', raw)
+    version_m = re.search(r'"INNERTUBE_CLIENT_VERSION"\s*:\s*"([^"]+)"', raw)
+    return (
+        api_key_m.group(1) if api_key_m else None,
+        version_m.group(1) if version_m else "1.20260505.09.00",
+    )
+
+
+def _ytm_video_id(url: str | None) -> str | None:
+    if not url:
+        return None
+    parsed = urlparse(url)
+    for part in parsed.query.split("&"):
+        if part.startswith("v="):
+            video_id = part.split("=", 1)[1].strip()
+            return video_id or None
+    return None
+
+
+def _fetch_ytm_api(endpoint: str, payload: dict[str, Any], api_key: str) -> dict[str, Any]:
+    url = f"https://music.youtube.com/youtubei/v1/{endpoint}?key={api_key}"
+    _validate_source_url(url)
+    try:
+        result = subprocess.run(
+            [
+                "curl", "-L", "-sS",
+                "--proto", "=http,https",
+                "-A", DEFAULT_HEADERS["User-Agent"],
+                "-H", "Accept-Language: en-US,en;q=0.9",
+                "-H", "Content-Type: application/json",
+                "-H", "Origin: https://music.youtube.com",
+                "-H", "Referer: https://music.youtube.com/",
+                "--max-time", str(SOURCE_FETCH_TIMEOUT_SECONDS),
+                "--max-filesize", str(MAX_SOURCE_BYTES),
+                "--data-raw", json.dumps(payload),
+                url,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return json.loads(result.stdout)
+    except (subprocess.CalledProcessError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def _ytm_api_payload(client_version: str, **payload: Any) -> dict[str, Any]:
+    return {
+        "context": {
+            "client": {
+                "clientName": "WEB_REMIX",
+                "clientVersion": client_version,
+                "hl": "en",
+                "gl": "US",
+            }
+        },
+        **payload,
+    }
+
+
+def _extract_ytm_album_browse_id(data: dict[str, Any]) -> str | None:
+    for endpoint in _find_all_by_key(data, "browseEndpoint"):
+        if not isinstance(endpoint, dict):
+            continue
+        config = endpoint.get("browseEndpointContextSupportedConfigs") or {}
+        music_config = config.get("browseEndpointContextMusicConfig") or {}
+        if music_config.get("pageType") == "MUSIC_PAGE_TYPE_ALBUM":
+            browse_id = str(endpoint.get("browseId") or "").strip()
+            if browse_id:
+                return browse_id
+    return None
+
+
+def _extract_ytm_year_from_objects(objects: list[dict[str, Any]]) -> int | None:
+    for obj in objects:
+        for subtitle in _find_all_by_key(obj, "subtitle"):
+            if not isinstance(subtitle, dict):
+                continue
+            runs = subtitle.get("runs") or []
+            for run in runs:
+                year_text = str(run.get("text") or "").strip() if isinstance(run, dict) else ""
+                if re.match(r"^(19|20)\d{2}$", year_text):
+                    return int(year_text)
+    return None
+
+
+def _extract_ytm_album_tracks_from_browse(data: dict[str, Any]) -> list[dict[str, Any]]:
+    for shelf in _find_all_by_key(data, "musicShelfRenderer"):
+        if not isinstance(shelf, dict):
+            continue
+        tracks: list[dict[str, Any]] = []
+        for renderer in _find_all_by_key(shelf.get("contents") or [], "musicResponsiveListItemRenderer"):
+            if not isinstance(renderer, dict):
+                continue
+            fixed_columns = renderer.get("fixedColumns") or []
+            if not fixed_columns:
+                continue
+            title = ""
+            flex_columns = renderer.get("flexColumns") or []
+            if flex_columns:
+                column = flex_columns[0].get("musicResponsiveListItemFlexColumnRenderer") or {}
+                title = _ytm_text(column.get("text")).strip()
+            duration_seconds: int | None = None
+            fixed_column = fixed_columns[0].get("musicResponsiveListItemFixedColumnRenderer") or {}
+            duration_raw = _ytm_text(fixed_column.get("text")).strip()
+            if re.match(r"^\d+:\d+", duration_raw):
+                try:
+                    duration_seconds = display_to_seconds(duration_raw)
+                except ValueError:
+                    duration_seconds = None
+            if title:
+                tracks.append(
+                    {
+                        "track_number": len(tracks) + 1,
+                        "title": title,
+                        "duration_seconds": duration_seconds,
+                    }
+                )
+        if len(tracks) > 1:
+            return tracks
+    return []
+
+
+def _youtube_music_album_draft_from_browse(
+    request: ImportRequest,
+    browse_data: dict[str, Any],
+    fallback_url: str,
+) -> AlbumDraftData | None:
+    if not browse_data:
+        return None
+    microformat = (browse_data.get("microformat") or {}).get("microformatDataRenderer") or {}
+    title_text = str(microformat.get("title") or "").strip()
+    album_title = request.album_title or ""
+    artist_name = request.artist_name or ""
+    if title_text:
+        by_m = re.search(r"(.+?)\s*-\s*(?:Album\s+by|EP\s+by|Single\s+by)\s+(.+)", title_text, re.IGNORECASE)
+        if by_m:
+            album_title = album_title or by_m.group(1).strip()
+            artist_name = artist_name or by_m.group(2).strip()
+        else:
+            album_title = album_title or title_text
+    if not artist_name:
+        strapline = _find_all_by_key(browse_data, "straplineTextOne")
+        for item in strapline:
+            text = _ytm_text(item).strip()
+            if text:
+                artist_name = text
+                break
+    if not album_title:
+        for title in _find_all_by_key(browse_data, "title"):
+            text = _ytm_text(title).strip()
+            if text:
+                album_title = text
+                break
+
+    tracks = _extract_ytm_album_tracks_from_browse(browse_data)
+    release_year = _extract_ytm_year_from_objects([browse_data])
+    known_secs = [t["duration_seconds"] for t in tracks if t.get("duration_seconds") is not None]
+    total_seconds = sum(known_secs) if known_secs else None
+    album_url = str(microformat.get("urlCanonical") or fallback_url)
+    cover_url = _ytm_thumbnail_url(microformat.get("thumbnail")) or _ytm_thumbnail_url(browse_data)
+
+    return AlbumDraftData(
+        artist_name=artist_name or request.artist_name,
+        artist_description=None,
+        album_external_url=album_url,
+        album_stream_url=album_url,
+        album_title=album_title,
+        release_year=release_year,
+        duration_seconds=total_seconds,
+        cover_source_url=cover_url,
+        notes=str(microformat.get("description") or "").strip() or None,
+        tracks=tracks,
+    )
+
+
+def _youtube_music_album_draft_from_watch_url(
+    request: ImportRequest,
+    ytm_raw: str,
+    metadata: dict[str, Any],
+) -> AlbumDraftData | None:
+    video_id = _ytm_video_id(request.source_url)
+    api_key, client_version = _ytm_api_config(ytm_raw)
+    if not video_id or not api_key:
+        return None
+    next_data = _fetch_ytm_api(
+        "next",
+        _ytm_api_payload(client_version, videoId=video_id, isAudioOnly=True),
+        api_key,
+    )
+    browse_id = _extract_ytm_album_browse_id(next_data)
+    if not browse_id:
+        return None
+    browse_data = _fetch_ytm_api("browse", _ytm_api_payload(client_version, browseId=browse_id), api_key)
+    draft = _youtube_music_album_draft_from_browse(request, browse_data, request.source_url)
+    if draft is None:
+        return None
+    if not draft.cover_source_url:
+        draft = draft.model_copy(update={"cover_source_url": metadata.get("image")})
+    return draft
+
+
 def _extract_ytm_year(raw: str) -> int | None:
     """Extract the release year from the ``subtitle`` field of a YTM album page.
 
@@ -783,6 +1060,11 @@ def _youtube_music_album_draft(request: ImportRequest, html: str, metadata: dict
     # Fetch the full YTM page (Accept-Language: en-US) to get year from initialData.
     # _page_metadata() truncates to 40KB which misses the initialData blocks.
     ytm_raw = _fetch_ytm_full_page(request.source_url)
+    is_watch_url = _is_youtube_music_watch_url(request.source_url)
+    if is_watch_url:
+        resolved_draft = _youtube_music_album_draft_from_watch_url(request, ytm_raw, metadata)
+        if resolved_draft is not None and len(resolved_draft.tracks) > 1:
+            return resolved_draft
 
     # og:title from music.youtube.com is English and follows "X - Album by Y"
     og_title = str(metadata.get("title") or "")
@@ -807,6 +1089,8 @@ def _youtube_music_album_draft(request: ImportRequest, html: str, metadata: dict
                     break
             if not album_title:
                 album_title = og_title.strip()
+            if is_watch_url and not artist_name:
+                artist_name = str(metadata.get("description") or "").strip()
 
     # Cover: og:image from the music.youtube.com fetch is reliable
     cover_url = metadata.get("image")
@@ -866,10 +1150,92 @@ def _extract_location_from_born(born_text: str) -> str | None:
     return None
 
 
+_WIKIPEDIA_COUNTRY_ALIASES = {
+    "u.s.": "United States",
+    "u.s": "United States",
+    "us": "United States",
+    "usa": "United States",
+    "u.s.a.": "United States",
+    "u.s.a": "United States",
+    "uk": "United Kingdom",
+    "u.k.": "United Kingdom",
+    "u.k": "United Kingdom",
+}
+
+_WIKIPEDIA_COUNTRY_NAMES = {
+    "australia",
+    "canada",
+    "denmark",
+    "england",
+    "finland",
+    "france",
+    "germany",
+    "ireland",
+    "israel",
+    "italy",
+    "japan",
+    "netherlands",
+    "new zealand",
+    "norway",
+    "poland",
+    "scotland",
+    "serbia",
+    "spain",
+    "sweden",
+    "united kingdom",
+    "united states",
+    "wales",
+}
+
+
+def _normalize_wikipedia_origin(origin: str | None) -> str | None:
+    if not origin:
+        return None
+    cleaned = re.sub(r"\s+,", ",", origin)
+    cleaned = re.sub(r",\s*", ", ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,")
+    if not cleaned:
+        return None
+
+    parts = [part.strip() for part in cleaned.split(",") if part.strip()]
+    if len(parts) < 2:
+        return cleaned
+
+    country_raw = parts[-1].rstrip(".")
+    country_key = country_raw.lower()
+    country = _WIKIPEDIA_COUNTRY_ALIASES.get(country_key)
+    if country is None and country_key in _WIKIPEDIA_COUNTRY_NAMES:
+        country = parts[-1]
+    if country is None:
+        return cleaned
+    return ", ".join([country, *parts[:-1]])
+
+
 def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
     metadata = _page_metadata(request.source_url)
     html = str(metadata.get("html") or "")
     source_label = str(metadata.get("source_label") or _host_label(request.source_url) or "")
+    if "music.youtube.com" in source_label:
+        artist_name = request.artist_name.strip()
+        if not artist_name:
+            title = str(metadata.get("title") or "").strip()
+            by_m = re.search(r"\s*-\s*(?:Album\s+by|EP\s+by|Single\s+by)\s+(.+)", title, re.IGNORECASE)
+            if by_m:
+                artist_name = by_m.group(1).strip()
+            elif _is_youtube_music_watch_url(request.source_url):
+                artist_name = str(metadata.get("description") or "").strip()
+            elif title:
+                artist_name = re.sub(r"\s*-\s*YouTube Music\s*$", "", title, flags=re.IGNORECASE).strip()
+        if not artist_name:
+            artist_name = _host_label(request.source_url) or "Unknown Artist"
+        description = None if _is_youtube_music_album_source_url(request.source_url) else metadata.get("description")
+        return ArtistDraftData(
+            artist_name=artist_name,
+            description=description,
+            external_url=request.source_url,
+            origin=None,
+            genre=None,
+        )
     if "metal-archives.com" in source_label and html:
         return _metal_archives_artist_draft(request, html, metadata)
     if "wikipedia.org" in source_label and html:
@@ -885,8 +1251,9 @@ def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
             born = infobox.get("Born")
             if born:
                 origin = _extract_location_from_born(born)
+        origin = _normalize_wikipedia_origin(origin)
         genre_raw = infobox.get("Genre") or infobox.get("Genres")
-        genre = re.split(r'[\n,/]', genre_raw)[0].strip() if genre_raw else None
+        genre = genre_raw.strip() if genre_raw else None
         description = metadata.get("description")
         if not description:
             body_m = re.search(r'<div[^>]+id=["\']mw-content-text["\'][^>]*>(.*?)</div>', html, re.DOTALL | re.IGNORECASE)
@@ -1100,9 +1467,9 @@ def _best_effort_album_draft(request: ImportRequest, metadata: dict[str, Any] | 
             draft = draft.model_copy(update={"album_type": inferred})
     updates: dict[str, object] = {}
     if draft.album_title:
-        updates["album_title"] = _fix_allcaps(draft.album_title)
+        updates["album_title"] = _fix_imported_title(draft.album_title)
     if draft.tracks:
-        fixed_tracks = [t.model_copy(update={"title": _fix_allcaps(t.title)}) for t in draft.tracks]
+        fixed_tracks = [t.model_copy(update={"title": _fix_imported_title(t.title)}) for t in draft.tracks]
         updates["tracks"] = fixed_tracks
     if updates:
         draft = draft.model_copy(update=updates)
@@ -1137,12 +1504,17 @@ def _looks_like_image_url(url: str | None) -> bool:
     return any(path.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".gif"])
 
 
-def _fix_allcaps(text: str) -> str:
-    """Title-case *text* if entirely upper-case, or title-case individual all-caps words (≥3 letters)."""
+def _fix_imported_title(text: str) -> str:
+    """Normalize imported album and track titles that arrive in machine casing."""
     if not text:
         return text
     if text.isupper():
         return text.title()
+    if any(ch.isalpha() for ch in text) and text == text.lower():
+        first_alpha = next((idx for idx, ch in enumerate(text) if ch.isalpha()), None)
+        if first_alpha is not None:
+            fixed = text[:first_alpha] + text[first_alpha].upper() + text[first_alpha + 1 :]
+            return re.sub(r"\bi(?=$|[^A-Za-z])", "I", fixed)
 
     def _fix_word(m: re.Match) -> str:
         w = m.group(0)
@@ -1151,6 +1523,10 @@ def _fix_allcaps(text: str) -> str:
         return w
 
     return re.sub(r"[A-Za-z']+", _fix_word, text)
+
+
+def _fix_allcaps(text: str) -> str:
+    return _fix_imported_title(text)
 
 
 def _normalize_cover_source_url(candidate_url: str | None, source_url: str | None) -> str | None:
@@ -1169,7 +1545,7 @@ def _normalize_cover_source_url(candidate_url: str | None, source_url: str | Non
 def _merge_album_drafts(ai_data: dict[str, Any], fallback: AlbumDraftData, request: ImportRequest) -> AlbumDraftData:
     merged = dict(ai_data)
     merged["artist_name"] = merged.get("artist_name") or fallback.artist_name or request.artist_name
-    merged["album_title"] = _fix_allcaps(merged.get("album_title") or fallback.album_title or request.album_title or "")
+    merged["album_title"] = _fix_imported_title(merged.get("album_title") or fallback.album_title or request.album_title or "")
     merged["artist_description"] = merged.get("artist_description") or fallback.artist_description
     merged["album_external_url"] = merged.get("album_external_url") or fallback.album_external_url or request.source_url
     merged["album_stream_url"] = fallback.album_stream_url or merged.get("album_stream_url")
@@ -1185,7 +1561,7 @@ def _merge_album_drafts(ai_data: dict[str, Any], fallback: AlbumDraftData, reque
     raw_tracks = merged.get("tracks") or [track.model_dump(mode="json") for track in fallback.tracks]
     for t in raw_tracks:
         if isinstance(t, dict) and t.get("title"):
-            t["title"] = _fix_allcaps(t["title"])
+            t["title"] = _fix_imported_title(t["title"])
     merged["tracks"] = raw_tracks
     merged["cover_source_url"] = (
         _normalize_cover_source_url(merged.get("cover_source_url"), request.source_url)

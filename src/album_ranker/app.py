@@ -703,7 +703,7 @@ def create_app(
         album_draft = None
         if existing_album is None:
             album_draft = db.create_import_job("album", album_request, draft_to_json(album_data))
-        artist_source_url = metal_archives_artist_url_from_album_url(payload.source_url)
+        artist_source_url = payload.artist_source_url or metal_archives_artist_url_from_album_url(payload.source_url)
         if not artist_source_url and _is_youtube_music_album_url(payload.source_url) and album_data.artist_name:
             artist_source_url = payload.source_url
         if not artist_source_url and _is_alterportal_album_url(payload.source_url) and album_data.artist_name:
