@@ -257,7 +257,8 @@ def test_manual_album_create_and_render_pages(client) -> None:
     assert "Genre" in albums_page.text
     assert '<option value="Black Metal">Black Metal</option>' in albums_page.text
     assert "Till Life Do Us Part - EP" in albums_page.text
-    assert "Scythe of Mephisto • 2026" in albums_page.text
+    assert "Scythe of Mephisto" in albums_page.text
+    assert "(2026)" in albums_page.text
     assert "Black Metal" in albums_page.text
     assert "8/10" in albums_page.text
     assert details_page.status_code == 200
@@ -908,6 +909,62 @@ def test_bookmark_and_listened_missing_album_returns_404(client) -> None:
 
     assert bookmark.status_code == 404
     assert listened.status_code == 404
+
+
+def test_bookmark_note_set_and_persist(client) -> None:
+    album = _create_album(client, artist_name="Mantar", title="Death by Rock and Roll")
+    album_id = album["id"]
+
+    client.patch(f"/api/albums/{album_id}/bookmark", json={"bookmarked": True})
+
+    patched = client.patch(f"/api/albums/{album_id}/bookmark-note", json={"note": "Great review in Terrorizer"})
+    assert patched.status_code == 200
+    assert patched.json()["bookmark_note"] == "Great review in Terrorizer"
+
+    fetched = client.get(f"/api/albums/{album_id}").json()
+    assert fetched["bookmark_note"] == "Great review in Terrorizer"
+
+    bookmarks_page = client.get("/bookmarks")
+    assert "Great review in Terrorizer" in bookmarks_page.text
+
+
+def test_bookmark_note_cleared_on_unbookmark(client) -> None:
+    album = _create_album(client, artist_name="Mantar", title="Ode to the Flame")
+    album_id = album["id"]
+
+    client.patch(f"/api/albums/{album_id}/bookmark", json={"bookmarked": True})
+    client.patch(f"/api/albums/{album_id}/bookmark-note", json={"note": "Highly recommended"})
+
+    unbookmarked = client.patch(f"/api/albums/{album_id}/bookmark", json={"bookmarked": False})
+    assert unbookmarked.status_code == 200
+    assert unbookmarked.json()["bookmarked_at"] is None
+    assert unbookmarked.json()["bookmark_note"] is None
+
+
+def test_bookmark_note_on_unbookmarked_album_saves(client) -> None:
+    album = _create_album(client, artist_name="Mantar", title="The Modern Art of Setting Ablaze")
+    album_id = album["id"]
+
+    resp = client.patch(f"/api/albums/{album_id}/bookmark-note", json={"note": "test"})
+    assert resp.status_code == 200
+    assert resp.json()["bookmark_note"] == "test"
+
+
+def test_bookmark_note_missing_album_returns_404(client) -> None:
+    resp = client.patch("/api/albums/99999/bookmark-note", json={"note": "test"})
+    assert resp.status_code == 404
+
+
+def test_bookmark_note_null_clears_note(client) -> None:
+    album = _create_album(client, artist_name="Mantar", title="Hang On")
+    album_id = album["id"]
+
+    client.patch(f"/api/albums/{album_id}/bookmark", json={"bookmarked": True})
+    client.patch(f"/api/albums/{album_id}/bookmark-note", json={"note": "Some note"})
+
+    cleared = client.patch(f"/api/albums/{album_id}/bookmark-note", json={"note": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["bookmark_note"] is None
 
 
 def test_bookmarked_album_detail_shows_independent_bookmark_and_listened_actions(client) -> None:

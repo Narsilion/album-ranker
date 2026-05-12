@@ -144,6 +144,10 @@ class AlbumBookmarkPatch(BaseModel):
     bookmarked: bool
 
 
+class AlbumBookmarkNotePatch(BaseModel):
+    note: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
+
+
 class AlbumListenedPatch(BaseModel):
     listened: bool
 
@@ -164,6 +168,7 @@ class AlbumCardRecord(BaseModel):
     album_type: str | None = None
     notes: str | None = None
     bookmarked_at: str | None = None
+    bookmark_note: str | None = None
     listened_at: str | None = None
     created_at: str
     updated_at: str

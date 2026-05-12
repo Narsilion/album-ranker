@@ -23,6 +23,7 @@ from album_ranker.importer import (
 from album_ranker.openai_client import AlbumWriteupAIClient
 from album_ranker.schemas import (
     AlbumBookmarkPatch,
+    AlbumBookmarkNotePatch,
     AlbumDetailRecord,
     AlbumListenedPatch,
     AlbumRatingPatch,
@@ -456,6 +457,15 @@ def create_app(
     async def patch_album_bookmark(album_id: int, payload: AlbumBookmarkPatch) -> AlbumDetailRecord:
         try:
             return db.set_album_bookmarked(album_id, payload.bookmarked)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.patch("/api/albums/{album_id}/bookmark-note", response_model=AlbumDetailRecord)
+    async def patch_album_bookmark_note(album_id: int, payload: AlbumBookmarkNotePatch) -> AlbumDetailRecord:
+        try:
+            return db.set_bookmark_note(album_id, payload.note)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:

@@ -99,6 +99,7 @@ class Database:
                     album_type TEXT,
                     notes TEXT,
                     bookmarked_at TEXT,
+                    bookmark_note TEXT,
                     listened_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -189,6 +190,8 @@ class Database:
                 connection.execute("ALTER TABLE albums ADD COLUMN overview TEXT")
             if "bookmarked_at" not in album_columns:
                 connection.execute("ALTER TABLE albums ADD COLUMN bookmarked_at TEXT")
+            if "bookmark_note" not in album_columns:
+                connection.execute("ALTER TABLE albums ADD COLUMN bookmark_note TEXT")
             if "listened_at" not in album_columns:
                 connection.execute("ALTER TABLE albums ADD COLUMN listened_at TEXT")
             connection.execute(
@@ -618,10 +621,26 @@ class Database:
 
     def set_album_bookmarked(self, album_id: int, bookmarked: bool) -> AlbumDetailRecord:
         self.get_album(album_id)
+        now = utc_now_iso()
+        with self.connection() as connection:
+            if bookmarked:
+                connection.execute(
+                    "UPDATE albums SET bookmarked_at = ?, updated_at = ? WHERE id = ?",
+                    (now, now, album_id),
+                )
+            else:
+                connection.execute(
+                    "UPDATE albums SET bookmarked_at = NULL, bookmark_note = NULL, updated_at = ? WHERE id = ?",
+                    (now, album_id),
+                )
+        return self.get_album(album_id)
+
+    def set_bookmark_note(self, album_id: int, note: str | None) -> AlbumDetailRecord:
+        self.get_album(album_id)
         with self.connection() as connection:
             connection.execute(
-                "UPDATE albums SET bookmarked_at = ?, updated_at = ? WHERE id = ?",
-                (utc_now_iso() if bookmarked else None, utc_now_iso(), album_id),
+                "UPDATE albums SET bookmark_note = ?, updated_at = ? WHERE id = ?",
+                (note or None, utc_now_iso(), album_id),
             )
         return self.get_album(album_id)
 

@@ -92,6 +92,11 @@ def _strip_html(html: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _clean_wikipedia_text(text: str) -> str:
+    text = re.sub(r"(?:\[\s*\d+(?:\s*,\s*\d+)*\s*\]\s*)+", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _fetch_with_urllib(url: str) -> tuple[str, str]:
     request = Request(url, headers=DEFAULT_HEADERS)
     with urlopen(request, timeout=SOURCE_FETCH_TIMEOUT_SECONDS) as response:
@@ -495,10 +500,11 @@ def _extract_wikipedia_infobox(html: str) -> dict[str, Any]:
                 val = _normalize_wikipedia_genres_from_html(tds[0]) or _html_unescape(_strip_html(tds[0])).strip()
             else:
                 val = _html_unescape(_strip_html(tds[0])).strip()
+            val = _clean_wikipedia_text(val)
             if key and val:
                 values[key] = val
         for th_content in ths:
-            text = _html_unescape(_strip_html(th_content)).strip()
+            text = _clean_wikipedia_text(_html_unescape(_strip_html(th_content)).strip())
             artist_m = re.search(r'(?i)(?:studio|live|compilation)\s+album\s+by\s+(.+)$', text)
             if artist_m:
                 values["_artist"] = artist_m.group(1).strip()
@@ -543,6 +549,33 @@ def _normalize_wikipedia_genres_from_html(html: str) -> str | None:
                 genres.append(genre)
                 seen.add(key)
     return " / ".join(genres) if genres else None
+
+
+def _extract_wikipedia_lead_description(html: str, *, max_paragraphs: int = 2) -> str | None:
+    content_start = re.search(r'(?is)<div[^>]+id=["\']mw-content-text["\'][^>]*>', html)
+    if content_start:
+        fragment = html[content_start.end():]
+    else:
+        body_start = re.search(r"(?is)<body[^>]*>", html)
+        fragment = html[body_start.end():] if body_start else html
+
+    first_heading = re.search(r"(?is)<h2\b", fragment)
+    if first_heading:
+        fragment = fragment[: first_heading.start()]
+
+    paragraphs: list[str] = []
+    for para_m in re.finditer(r"(?is)<p\b[^>]*>(.*?)</p>", fragment):
+        para = para_m.group(1)
+        para = re.sub(r"(?is)<sup\b[^>]*>.*?</sup>", " ", para)
+        para = re.sub(r"(?is)<span[^>]+class=[\"'][^\"']*mw-editsection[^\"']*[\"'][^>]*>.*?</span>", " ", para)
+        text = _html_unescape(_strip_html(para)).strip()
+        text = _clean_wikipedia_text(text)
+        if len(text) <= 40:
+            continue
+        paragraphs.append(text)
+        if len(paragraphs) >= max_paragraphs:
+            break
+    return "\n\n".join(paragraphs) if paragraphs else None
 
 
 def _extract_wikipedia_tracks(html: str) -> list[dict[str, Any]]:
@@ -692,12 +725,46 @@ def _decode_ytm_initial_data_objects(raw: str) -> list[dict[str, Any]]:
     for m in re.finditer(r"data:\s*'((?:[^'\\]|\\.)*)'", raw):
         encoded = m.group(1)
         try:
-            decoded = re.sub(r"\\x([0-9a-fA-F]{2})", lambda x: chr(int(x.group(1), 16)), encoded)
-            decoded = decoded.replace("\\/", "/")
+            decoded = _decode_js_string_literal_contents(encoded)
             objects.append(json.loads(decoded))
         except (ValueError, json.JSONDecodeError):
             pass
     return objects
+
+
+def _decode_js_string_literal_contents(encoded: str) -> str:
+    chars: list[str] = []
+    i = 0
+    while i < len(encoded):
+        char = encoded[i]
+        if char != "\\" or i + 1 >= len(encoded):
+            chars.append(char)
+            i += 1
+            continue
+
+        esc = encoded[i + 1]
+        if esc == "x" and i + 3 < len(encoded) and re.match(r"^[0-9a-fA-F]{2}$", encoded[i + 2 : i + 4]):
+            chars.append(chr(int(encoded[i + 2 : i + 4], 16)))
+            i += 4
+            continue
+        if esc == "u" and i + 5 < len(encoded) and re.match(r"^[0-9a-fA-F]{4}$", encoded[i + 2 : i + 6]):
+            chars.append(chr(int(encoded[i + 2 : i + 6], 16)))
+            i += 6
+            continue
+        if esc == "n":
+            chars.append("\n")
+        elif esc == "r":
+            chars.append("\r")
+        elif esc == "t":
+            chars.append("\t")
+        elif esc == "b":
+            chars.append("\b")
+        elif esc == "f":
+            chars.append("\f")
+        else:
+            chars.append(esc)
+        i += 2
+    return "".join(chars)
 
 
 def _runs_text(runs_obj: Any) -> str:
@@ -1098,20 +1165,8 @@ def _youtube_music_album_draft(request: ImportRequest, html: str, metadata: dict
     # Decode the YTM initialData objects once; reuse for both year and tracks.
     ytm_objects = _decode_ytm_initial_data_objects(ytm_raw) if ytm_raw else []
 
-    # Release year from the subtitle initialData field ("Album • 2026")
-    release_year: int | None = None
-    for _obj in ytm_objects:
-        for _subtitle in _find_all_by_key(_obj, "subtitle"):
-            if not isinstance(_subtitle, dict):
-                continue
-            _runs = _subtitle.get("runs") or []
-            if len(_runs) == 3:
-                _year_text = str(_runs[2].get("text") or "").strip()
-                if re.match(r"^(19|20)\d{2}$", _year_text):
-                    release_year = int(_year_text)
-                    break
-        if release_year:
-            break
+    # Release year from the subtitle initialData field ("Album • 2026").
+    release_year = _extract_ytm_year_from_objects(ytm_objects)
 
     # Tracks: prefer the YTM page data (complete tracklist) over the regular
     # YouTube playlist page which only lazily inlines the first few items.
@@ -1151,12 +1206,14 @@ def _extract_location_from_born(born_text: str) -> str | None:
 
 
 _WIKIPEDIA_COUNTRY_ALIASES = {
-    "u.s.": "United States",
-    "u.s": "United States",
-    "us": "United States",
-    "usa": "United States",
-    "u.s.a.": "United States",
-    "u.s.a": "United States",
+    "u.s.": "USA",
+    "u.s": "USA",
+    "us": "USA",
+    "usa": "USA",
+    "u.s.a.": "USA",
+    "u.s.a": "USA",
+    "united states": "USA",
+    "united states of america": "USA",
     "uk": "United Kingdom",
     "u.k.": "United Kingdom",
     "u.k": "United Kingdom",
@@ -1183,8 +1240,58 @@ _WIKIPEDIA_COUNTRY_NAMES = {
     "spain",
     "sweden",
     "united kingdom",
-    "united states",
     "wales",
+}
+
+_WIKIPEDIA_US_STATE_NAMES = {
+    "alabama",
+    "alaska",
+    "arizona",
+    "arkansas",
+    "california",
+    "colorado",
+    "connecticut",
+    "delaware",
+    "florida",
+    "hawaii",
+    "idaho",
+    "illinois",
+    "indiana",
+    "iowa",
+    "kansas",
+    "kentucky",
+    "louisiana",
+    "maine",
+    "maryland",
+    "massachusetts",
+    "michigan",
+    "minnesota",
+    "mississippi",
+    "missouri",
+    "montana",
+    "nebraska",
+    "nevada",
+    "new hampshire",
+    "new jersey",
+    "new mexico",
+    "new york",
+    "north carolina",
+    "north dakota",
+    "ohio",
+    "oklahoma",
+    "oregon",
+    "pennsylvania",
+    "rhode island",
+    "south carolina",
+    "south dakota",
+    "tennessee",
+    "texas",
+    "utah",
+    "vermont",
+    "virginia",
+    "west virginia",
+    "wisconsin",
+    "wyoming",
 }
 
 
@@ -1199,13 +1306,17 @@ def _normalize_wikipedia_origin(origin: str | None) -> str | None:
 
     parts = [part.strip() for part in cleaned.split(",") if part.strip()]
     if len(parts) < 2:
+        if cleaned.lower() in _WIKIPEDIA_US_STATE_NAMES:
+            return f"USA, {cleaned}"
         return cleaned
 
-    country_raw = parts[-1].rstrip(".")
+    country_raw = _clean_wikipedia_text(parts[-1]).rstrip(".")
     country_key = country_raw.lower()
     country = _WIKIPEDIA_COUNTRY_ALIASES.get(country_key)
     if country is None and country_key in _WIKIPEDIA_COUNTRY_NAMES:
         country = parts[-1]
+    if country is None and country_key in _WIKIPEDIA_US_STATE_NAMES:
+        return ", ".join(["USA", *parts])
     if country is None:
         return cleaned
     return ", ".join([country, *parts[:-1]])
@@ -1246,24 +1357,13 @@ def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
             artist_name = title.split(" - ")[0].strip() if title else ""
         if not artist_name:
             artist_name = _host_label(request.source_url) or "Unknown Artist"
-        origin = infobox.get("Origin") or infobox.get("Birthplace")
-        if not origin:
-            born = infobox.get("Born")
-            if born:
-                origin = _extract_location_from_born(born)
+        born = infobox.get("Born")
+        born_location = _extract_location_from_born(born) if born else None
+        origin = infobox.get("Birthplace") or born_location or infobox.get("Origin")
         origin = _normalize_wikipedia_origin(origin)
         genre_raw = infobox.get("Genre") or infobox.get("Genres")
         genre = genre_raw.strip() if genre_raw else None
-        description = metadata.get("description")
-        if not description:
-            body_m = re.search(r'<div[^>]+id=["\']mw-content-text["\'][^>]*>(.*?)</div>', html, re.DOTALL | re.IGNORECASE)
-            if body_m:
-                paras = re.findall(r'<p[^>]*>(.*?)</p>', body_m.group(1), re.DOTALL | re.IGNORECASE)
-                for para in paras:
-                    text = _html_unescape(_strip_html(para)).strip()
-                    if len(text) > 40:
-                        description = text
-                        break
+        description = metadata.get("description") or _extract_wikipedia_lead_description(html)
         return ArtistDraftData(
             artist_name=artist_name,
             description=description,

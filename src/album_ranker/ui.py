@@ -652,6 +652,32 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         font-size: 12px;
         flex: 1 1 auto;
       }}
+      .bookmark-note-input {{
+        font-size: 0.78rem;
+        width: 100%;
+        box-sizing: border-box;
+        resize: vertical;
+      }}
+      .bookmark-note-toggle {{
+        font-size: 0.75rem;
+        padding: 2px 6px;
+        margin-top: 4px;
+        color: var(--muted);
+        background: none;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        cursor: pointer;
+      }}
+      .bookmark-note-toggle.active {{
+        color: var(--fg);
+        border-color: var(--accent);
+      }}
+      .bookmark-note-toggle.has-note {{
+        color: var(--fg);
+      }}
+      .bookmark-note-row {{
+        margin-top: 4px;
+      }}
       .star-widget-label {{
         font-size: 13px;
         font-weight: 600;
@@ -1357,6 +1383,16 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         document.querySelectorAll(`.album-listened-state[data-album-id="${{albumId}}"]`).forEach((node) => {{
           node.textContent = listened ? "Listened" : "Not Listened";
         }});
+        const noteArea = document.getElementById("bookmarkNoteArea");
+        if (noteArea) {{
+          noteArea.style.display = bookmarked ? "" : "none";
+          if (!bookmarked) {{
+            const noteInput = document.getElementById("bookmarkNoteInput");
+            if (noteInput) noteInput.value = "";
+            const noteStatus = document.getElementById("bookmarkNoteStatus");
+            if (noteStatus) noteStatus.textContent = "";
+          }}
+        }}
       }}
       document.querySelectorAll(".album-bookmark-toggle").forEach((button) => {{
         button.addEventListener("click", async (event) => {{
@@ -1411,6 +1447,47 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           }}
         }});
       }});
+      async function saveBookmarkNote(albumId, note, statusEl) {{
+        if (statusEl) {{ statusEl.textContent = "Saving…"; statusEl.className = "status compact"; }}
+        try {{
+          const payload = await fetchJson(`/api/albums/${{albumId}}/bookmark-note`, {{
+            method: "PATCH",
+            body: JSON.stringify({{ note: note || null }}),
+          }});
+          if (statusEl) {{ statusEl.textContent = "Saved"; setTimeout(() => {{ statusEl.textContent = ""; }}, 2000); }}
+          const hasNote = Boolean(payload.bookmark_note);
+          document.querySelectorAll(`.bookmark-note-toggle[data-album-id="${{albumId}}"]`).forEach((btn) => {{
+            btn.classList.toggle("has-note", hasNote);
+            btn.textContent = hasNote ? "💬 note" : "✎";
+          }});
+          const detailNoteInput = document.getElementById("bookmarkNoteInput");
+          if (detailNoteInput && String(detailNoteInput.dataset.albumId) === String(albumId)) {{
+            const noteArea = document.getElementById("bookmarkNoteArea");
+            if (noteArea) noteArea.style.display = "";
+          }}
+        }} catch (error) {{
+          if (statusEl) {{ statusEl.textContent = error.message || "Save failed."; statusEl.className = "status compact error"; }}
+        }}
+      }}
+      const detailNoteInput = document.getElementById("bookmarkNoteInput");
+      if (detailNoteInput) {{
+        const detailNoteStatus = document.getElementById("bookmarkNoteStatus");
+        detailNoteInput.addEventListener("blur", () => {{
+          saveBookmarkNote(detailNoteInput.dataset.albumId, detailNoteInput.value, detailNoteStatus);
+        }});
+        detailNoteInput.addEventListener("keydown", (e) => {{
+          if (e.key === "Enter" && !e.shiftKey) {{ e.preventDefault(); detailNoteInput.blur(); }}
+        }});
+      }}
+      document.querySelectorAll(".bookmark-note-input").forEach((textarea) => {{
+        textarea.addEventListener("click", (e) => {{ e.stopPropagation(); }});
+        textarea.addEventListener("blur", () => {{
+          saveBookmarkNote(textarea.dataset.albumId, textarea.value, null);
+        }});
+        textarea.addEventListener("keydown", (e) => {{
+          if (e.key === "Enter" && !e.shiftKey) {{ e.preventDefault(); textarea.blur(); }}
+        }});
+      }});
     </script>
     <div id="globalToast" role="alert" aria-live="assertive" aria-atomic="true"></div>
   </body>
@@ -1444,14 +1521,12 @@ def _album_card_markup(
     include_bookmark_action: bool = True,
     include_listened_action: bool = False,
     include_listened_cover_action: bool = True,
+    show_bookmark_note: bool = False,
     extra_class: str = "",
     extra_attrs: str = "",
 ) -> str:
-    year_str = str(album.release_year or "")
-    if show_artist:
-        artist_line = " • ".join(part for part in [album.artist_name, year_str] if part).strip()
-    else:
-        artist_line = year_str
+    year_str = f" ({album.release_year})" if album.release_year else ""
+    artist_line = album.artist_name if show_artist else ""
     genre_line = album.genre or ""
     if interactive_rating:
         current = album.rating or 0
@@ -1474,6 +1549,25 @@ def _album_card_markup(
         else ""
     )
     actions = f'<div class="album-card-actions">{listened_button}</div>' if listened_button else ""
+    if show_bookmark_note:
+        has_note = bool(album.bookmark_note)
+        toggle_label = "💬 note" if has_note else "✎"
+        note_area = (
+            f'<div class="bookmark-note-row" onclick="event.stopPropagation();">'
+            f'<button type="button" class="bookmark-note-toggle{" has-note" if has_note else ""}" '
+            f'data-album-id="{album.id}" '
+            f'onclick="event.preventDefault();event.stopPropagation();'
+            f'var x=this.nextElementSibling;var shown=x.style.display!==\'none\';'
+            f'x.style.display=shown?\'none\':\'\';this.classList.toggle(\'active\',!shown);">'
+            f'{toggle_label}</button>'
+            f'<div class="bookmark-note-expand" style="display:none;">'
+            f'<textarea class="bookmark-note-input" data-album-id="{album.id}" rows="2" '
+            f'placeholder="Add a note\u2026">{_escape(album.bookmark_note or "")}'
+            f'</textarea>'
+            f'</div></div>'
+        )
+    else:
+        note_area = ""
     return f"""
       <article class="album-card{(' ' + extra_class) if extra_class else ''}" data-genre="{_escape(album.genre)}" data-year="{_escape(str(album.release_year or ''))}" data-artist="{_escape(album.artist_name)}" data-title="{_escape(album.title)}"{(' ' + extra_attrs) if extra_attrs else ''}>
         <div class="cover-frame">
@@ -1482,11 +1576,12 @@ def _album_card_markup(
           </a>
           {cover_listened_btn}{cover_bookmark_btn}
         </div>
-        <a class="album-title album-card-link" href="/albums/{album.id}">{_escape(album.title)}</a>
+        <a class="album-title album-card-link" href="/albums/{album.id}">{_escape(album.title)}{_escape(year_str)}</a>
         {f'<div class="album-type muted">{_escape(album.album_type)}</div>' if album.album_type else ''}
-        <div class="album-subtitle">{_escape(artist_line)}</div>
+        {f'<div class="album-subtitle">{_escape(artist_line)}</div>' if artist_line else ''}
         <div class="album-genre">{_escape(genre_line)}</div>
         {rating_widget}
+        {note_area}
         {actions}
       </article>
     """
@@ -1563,8 +1658,8 @@ def _list_markup(record: AlbumListRecord, all_albums: "list[AlbumCardRecord] | N
           <div><strong>{item.rank_position}.</strong></div>
           <a class="rank-cover" href="/albums/{item.album.id}"><img src="{_cover_src(item.album.cover_image_path)}" alt="{_escape(item.album.title)} cover"></a>
           <div>
-            <a href="/albums/{item.album.id}" style="text-decoration:none;"><strong>{_escape(item.album.title)}</strong></a>
-            <div class="muted">{_escape(item.album.artist_name)} { _escape(str(item.album.release_year or '')) }</div>
+            <a href="/albums/{item.album.id}" style="text-decoration:none;"><strong>{_escape(item.album.title)}{(' (' + str(item.album.release_year) + ')') if item.album.release_year else ''}</strong></a>
+            <div class="muted">{_escape(item.album.artist_name)}</div>
             {_rating_markup(item.album.rating)}
           </div>
           <div class="mini-actions">
@@ -2029,7 +2124,7 @@ def render_artist_detail_page(
     imports: list[ImportDraftRecord],
 ) -> str:
     albums_markup = "".join(
-        _album_card_markup(album, show_artist=False, interactive_rating=True) for album in artist.albums
+        _album_card_markup(album, show_artist=False, interactive_rating=True, show_bookmark_note=True) for album in artist.albums
     ) or '<p class="muted">No albums added yet.</p>'
     source_link = (
         f'<a class="tag" href="{_escape(artist.external_url)}" target="_blank" rel="noreferrer">Open Source</a>'
@@ -2999,6 +3094,7 @@ def render_albums_page(
             album,
             extra_class="hidden" if index >= 20 else "",
             extra_attrs=f'data-recent-index="{index}"',
+            show_bookmark_note=True,
         )
         for index, album in enumerate(recent_albums)
     ) or '<p class="muted">No albums yet. Head to an <a href="/artists">artist page</a> to import or create albums.</p>'
@@ -3100,7 +3196,7 @@ def render_bookmarks_page(settings: SettingsRecord, albums: list[AlbumCardRecord
         _album_card_markup(
             album,
             include_bookmark_action=True,
-            include_listened_action=True,
+            show_bookmark_note=True,
         )
         for album in albums
     )
@@ -3162,6 +3258,11 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               {_album_detail_listen_action(album)}
             </div>
             <div class="status album-listened-state" data-album-id="{album.id}" style="text-align:center;">{"Listened" if album.listened_at else "Not Listened"}</div>
+            <div id="bookmarkNoteArea" style="margin-bottom:8px;{'display:none;' if not album.bookmarked_at else ''}">
+              <label class="form-label" for="bookmarkNoteInput" style="font-size:0.8rem;margin-bottom:4px;display:block;">Bookmark note</label>
+              <textarea id="bookmarkNoteInput" data-album-id="{album.id}" rows="3" placeholder="Why did you save this album?" style="width:100%;box-sizing:border-box;resize:vertical;font-size:0.78rem;">{_escape(album.bookmark_note or '')}</textarea>
+              <div class="status compact" id="bookmarkNoteStatus" style="min-height:1.2em;"></div>
+            </div>
             <button type="button" id="albumEditToggle" class="secondary" style="margin-bottom:8px;" aria-controls="albumEditPanel" aria-expanded="false">Edit Album Metadata</button>
             <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px;">
               <button type="button" id="albumRefreshBtn" class="secondary" title="Re-fetch metadata from source URL" aria-controls="albumRefreshSourcePanel" aria-expanded="false">&#8635; Refresh Metadata</button>
@@ -3186,20 +3287,30 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
         </div>
         <div class="grid" style="align-self:start; margin-top:0;">
           <section class="panel">
+            <div class="panel-title">{_escape(description_title)}</div>
+            {f'<a class="tag" href="{_escape(description_source_url)}" target="_blank" rel="noreferrer" style="flex:0 0 auto; margin-bottom:8px;">{_escape(description_source_label)}</a>' if description_source_url else ''}
+            <div id="albumArtistDescription" class="clamp">{description_text}</div>
+            <div class="row" style="margin-top:8px;">
+              <button type="button" class="toggle-link" data-toggle-clamp="albumArtistDescription" style="flex:0 0 auto;" aria-controls="albumArtistDescription" aria-expanded="false">MORE</button>
+            </div>
+          </section>
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <div class="meta-item">
+              <span class="meta-item-label">Genre</span>
+              {_escape(album.genre or 'Unknown genre')}
+            </div>
+            <div class="meta-item">
+              <span class="meta-item-label">Type</span>
+              {_escape(album.album_type or 'Unknown type')}
+            </div>
+          </div>
+          <section class="panel">
             <div class="panel-title">Tracklist</div>
             <div class="tracklist">{track_rows}</div>
             <div style="margin-top:12px; display:flex; flex-direction:column; gap:4px;">
               <div class="meta-item">
                 <span class="meta-item-label">Length</span>
                 {_escape(seconds_to_display(album.duration_seconds) or 'Unknown length')}
-              </div>
-              <div class="meta-item">
-                <span class="meta-item-label">Genre</span>
-                {_escape(album.genre or 'Unknown genre')}
-              </div>
-              <div class="meta-item">
-                <span class="meta-item-label">Type</span>
-                {_escape(album.album_type or 'Unknown type')}
               </div>
             </div>
           </section>
@@ -3261,6 +3372,39 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               </div>
             </form>
           </section>
+          <section class="panel">
+            <div class="detail-head" style="margin-bottom:4px;">
+              <div class="panel-title" style="margin-bottom:0;">Album Write-up / Telegram Post</div>
+              <div class="row" style="gap:8px; align-items:center; flex-shrink:0;">
+                <button type="button" id="overviewGenerateBtn" class="secondary" style="flex:0 0 auto; font-size:0.85em;">{"✦ Regenerate" if album.overview else "✦ Generate Write-up"}</button>
+                <button type="button" id="overviewCancelBtn" class="secondary hidden" style="flex:0 0 auto; font-size:0.85em;">Cancel</button>
+              </div>
+            </div>
+            <div style="display:flex; gap:12px; align-items:center; margin-bottom:4px;">
+              <label style="font-size:0.85em; color:var(--muted); display:flex; align-items:center; gap:4px; cursor:pointer; flex:0 0 auto;">
+                <input type="radio" name="overviewLang" value="en" {"checked" if True else ""}> English
+              </label>
+              <label style="font-size:0.85em; color:var(--muted); display:flex; align-items:center; gap:4px; cursor:pointer; flex:0 0 auto;">
+                <input type="radio" name="overviewLang" value="ru"> Russian
+              </label>
+            </div>
+            <div id="overviewProgress" style="display:none; margin:8px 0 4px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
+              <div style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
+            </div>
+            <div class="status" id="overviewStatus" style="font-size:0.85em; margin-top:6px;"></div>
+            {(f'<div id="overviewDisplay" style="white-space:pre-wrap; font-size:0.95em; line-height:1.6; margin-top:12px;">{_render_writeup(album.overview)}</div>') if album.overview else '<div id="overviewDisplay" style="display:none; white-space:pre-wrap; font-size:0.95em; line-height:1.6; margin-top:12px;"></div>'}
+          </section>
+          <section class="panel hidden" id="overviewDraftPanel">
+            <div class="panel-title">Review Generated Write-up</div>
+            <div class="form-field">
+              <textarea id="overviewDraftText" rows="14" style="font-family:inherit; font-size:0.92em; line-height:1.6;"></textarea>
+            </div>
+            <div class="row">
+              <button type="button" id="overviewSaveBtn">Save Write-up</button>
+              <button type="button" class="secondary" id="overviewRejectBtn">Reject</button>
+              <span class="status" id="overviewSaveStatus"></span>
+            </div>
+          </section>
         </div>
       </section>
       <section class="panel hidden" id="albumRefreshReview" style="margin-top:16px; max-width:884px;">
@@ -3307,45 +3451,6 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             <span class="status" id="albumRefreshApplyStatus"></span>
           </div>
         </form>
-      </section>
-      <section class="panel" style="margin-top:16px; max-width:884px;">
-        <div class="panel-title">{_escape(description_title)}</div>
-        {f'<a class="tag" href="{_escape(description_source_url)}" target="_blank" rel="noreferrer" style="flex:0 0 auto;">{_escape(description_source_label)}</a>' if description_source_url else ''}
-        <div id="albumArtistDescription" class="clamp">{description_text}</div>
-        <div class="row" style="margin-top:8px;">
-          <button type="button" class="toggle-link" data-toggle-clamp="albumArtistDescription" style="flex:0 0 auto;" aria-controls="albumArtistDescription" aria-expanded="false">MORE</button>
-        </div>
-      </section>
-      <section class="panel" style="margin-top:16px; max-width:884px;">
-        <div class="detail-head" style="margin-bottom:0;">
-          <div class="panel-title" style="margin-bottom:0;">Album Write-up / Telegram Post</div>
-          <div class="row" style="gap:8px; align-items:center;">
-            <label style="font-size:0.85em; color:var(--muted); display:flex; align-items:center; gap:4px; cursor:pointer;">
-              <input type="radio" name="overviewLang" value="en" {"checked" if True else ""}> English
-            </label>
-            <label style="font-size:0.85em; color:var(--muted); display:flex; align-items:center; gap:4px; cursor:pointer;">
-              <input type="radio" name="overviewLang" value="ru"> Russian
-            </label>
-            <button type="button" id="overviewGenerateBtn" class="secondary" style="flex:0 0 auto; font-size:0.85em;">{"✦ Regenerate" if album.overview else "✦ Generate Write-up"}</button>
-            <button type="button" id="overviewCancelBtn" class="secondary hidden" style="flex:0 0 auto; font-size:0.85em;">Cancel</button>
-          </div>
-        </div>
-        <div id="overviewProgress" style="display:none; margin:8px 0 4px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
-          <div style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
-        </div>
-        <div class="status" id="overviewStatus" style="font-size:0.85em; margin-top:6px;"></div>
-        {(f'<div id="overviewDisplay" style="white-space:pre-wrap; font-size:0.95em; line-height:1.6; margin-top:12px;">{_render_writeup(album.overview)}</div>') if album.overview else '<div id="overviewDisplay" style="display:none; white-space:pre-wrap; font-size:0.95em; line-height:1.6; margin-top:12px;"></div>'}
-      </section>
-      <section class="panel hidden" id="overviewDraftPanel" style="margin-top:16px; max-width:884px;">
-        <div class="panel-title">Review Generated Write-up</div>
-        <div class="form-field">
-          <textarea id="overviewDraftText" rows="14" style="font-family:inherit; font-size:0.92em; line-height:1.6;"></textarea>
-        </div>
-        <div class="row">
-          <button type="button" id="overviewSaveBtn">Save Write-up</button>
-          <button type="button" class="secondary" id="overviewRejectBtn">Reject</button>
-          <span class="status" id="overviewSaveStatus"></span>
-        </div>
       </section>
       <script>
         (function() {{

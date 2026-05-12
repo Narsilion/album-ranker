@@ -554,7 +554,7 @@ def test_wikipedia_artist_draft_normalizes_origin_country_first(monkeypatch) -> 
         )
     )
 
-    assert draft.origin == "United States, Edison, New Jersey"
+    assert draft.origin == "USA, Edison, New Jersey"
 
 
 def test_wikipedia_artist_draft_normalizes_origin_from_born_field(monkeypatch) -> None:
@@ -579,7 +579,91 @@ def test_wikipedia_artist_draft_normalizes_origin_from_born_field(monkeypatch) -
         )
     )
 
-    assert draft.origin == "United States, Edison, New Jersey"
+    assert draft.origin == "USA, Edison, New Jersey"
+
+
+def test_wikipedia_artist_draft_prefers_born_location_over_musical_origin(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <title>Stephen Sanchez - Wikipedia</title>
+      </head>
+      <body>
+        <table class="infobox biography vcard">
+          <tr>
+            <th>Born</th>
+            <td>
+              Stephen Christopher Sanchez (2002-11-03) November 3, 2002
+              (age 23)<sup>[1]</sup><br />
+              <a>El Dorado Hills, California</a>, U.S.<sup>[2]</sup>
+            </td>
+          </tr>
+          <tr><th>Origin</th><td><a>Nashville</a>, <a>Tennessee</a><sup>[3]</sup></td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(
+            artist_name="Stephen Sanchez",
+            source_url="https://en.wikipedia.org/wiki/Stephen_Sanchez",
+        )
+    )
+
+    assert draft.origin == "USA, El Dorado Hills, California"
+
+
+def test_wikipedia_artist_draft_adds_usa_for_state_only_origin(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <title>Yot Club - Wikipedia</title>
+      </head>
+      <body>
+        <table class="infobox biography vcard">
+          <tr><th>Born</th><td>John Ryan Kaiser<sup>[1]</sup></td></tr>
+          <tr><th>Origin</th><td><a>Mississippi</a></td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(
+            artist_name="Yot Club",
+            source_url="https://en.wikipedia.org/wiki/Yot_Club",
+        )
+    )
+
+    assert draft.origin == "USA, Mississippi"
+
+
+def test_wikipedia_artist_draft_adds_usa_for_city_state_origin(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <title>Band - Wikipedia</title>
+      </head>
+      <body>
+        <table class="infobox vcard">
+          <tr><th>Origin</th><td><a>Hattiesburg</a>, <a>Mississippi</a></td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(
+            artist_name="Band",
+            source_url="https://en.wikipedia.org/wiki/Band",
+        )
+    )
+
+    assert draft.origin == "USA, Hattiesburg, Mississippi"
 
 
 def test_wikipedia_artist_draft_formats_genre_list(monkeypatch) -> None:
@@ -622,6 +706,47 @@ def test_wikipedia_artist_draft_formats_genre_list(monkeypatch) -> None:
     assert draft.genre == (
         "Alternative Rock / Art Rock / Post-Grunge / Indie Rock / Gospel / "
         "Power Pop / Pop Rock / Post-Punk / Punk Rock"
+    )
+
+
+def test_wikipedia_artist_draft_extracts_lead_paragraphs_when_meta_description_is_missing(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <title>The Lemon Twigs - Wikipedia</title>
+      </head>
+      <body>
+        <div id="mw-content-text" class="mw-body-content">
+          <div class="mw-parser-output">
+            <div class="shortdescription nomobile noexcerpt noprint searchaux">American rock band</div>
+            <table class="infobox vcard">
+              <tr><th>Origin</th><td>Hicksville, Long Island, New York, U.S.</td></tr>
+              <tr><th>Genres</th><td><a>Power pop</a>, <a>glam rock</a></td></tr>
+            </table>
+            <p><b>The Lemon Twigs</b> are an American rock band from Hicksville, Long Island, New York.<sup>[1]</sup></p>
+            <p>The band's music has been noted for its stylistic roots in 1960s and 1970s pop and rock music. [ 2 ]</p>
+            <h2><span>History</span></h2>
+            <p>This later section should not be imported.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(
+            artist_name="",
+            source_url="https://en.wikipedia.org/wiki/The_Lemon_Twigs",
+        )
+    )
+
+    assert draft.artist_name == "The Lemon Twigs"
+    assert draft.origin == "USA, Hicksville, Long Island, New York"
+    assert draft.genre == "Power Pop / Glam Rock"
+    assert draft.description == (
+        "The Lemon Twigs are an American rock band from Hicksville, Long Island, New York.\n\n"
+        "The band's music has been noted for its stylistic roots in 1960s and 1970s pop and rock music."
     )
 
 
@@ -803,6 +928,62 @@ def test_ytm_album_draft_uses_ytm_page_tracks_not_playlist_page(monkeypatch) -> 
     assert draft.tracks[7].duration_seconds == 728
     # Total duration should be sum of all tracks
     assert draft.duration_seconds == sum(t.duration_seconds for t in draft.tracks if t.duration_seconds)
+
+
+def test_ytm_album_draft_decodes_album_data_with_escaped_quotes(monkeypatch) -> None:
+    og_html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Angel Face - Album by Stephen Sanchez">
+        <meta property="og:image" content="https://lh3.googleusercontent.com/cover.jpg">
+      </head>
+    </html>
+    """
+    import json as _json
+
+    album_obj = {
+        "header": {
+            "subtitle": {"runs": [{"text": "Album"}, {"text": " \u2022 "}, {"text": "2023"}]},
+            "description": {
+                "runs": [
+                    {
+                        "text": (
+                            'The album was preceded by three singles: "Evangeline", '
+                            '"Only Girl" and "Be More".'
+                        )
+                    }
+                ]
+            },
+        },
+        "musicShelfRenderer": {
+            "contents": [
+                {"musicResponsiveListItemRenderer": _make_ytm_renderer("Something About Her", "3:44")},
+                {"musicResponsiveListItemRenderer": _make_ytm_renderer("Evangeline", "2:57")},
+            ]
+        },
+    }
+
+    def _js_data_literal(obj: dict) -> str:
+        raw = _json.dumps(obj).replace("/", r"\/")
+        return raw.replace(r"\"", r"\\\x22").replace('"', r'\x22')
+
+    ytm_page = f"initialData.push({{data: '{_js_data_literal(album_obj)}'}});\n"
+
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (og_html, "text/html"))
+    monkeypatch.setattr(importer, "_fetch_ytm_full_page", lambda url: ytm_page)
+    monkeypatch.setattr(importer, "_extract_yt_playlist_tracks", lambda pid: [])
+
+    draft = importer._best_effort_album_draft(
+        ImportRequest(
+            artist_name="",
+            source_url="https://music.youtube.com/playlist?list=OLAK5uy_lr8rVu4_hwNrG3Xjs1YzRZgp7hPbBKGnE",
+        )
+    )
+
+    assert draft.album_title == "Angel Face"
+    assert draft.artist_name == "Stephen Sanchez"
+    assert draft.release_year == 2023
+    assert [track.title for track in draft.tracks] == ["Something About Her", "Evangeline"]
 
 
 def test_ytm_album_draft_sentence_cases_lowercase_track_titles(monkeypatch) -> None:
