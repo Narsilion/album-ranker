@@ -4,8 +4,9 @@ from datetime import datetime
 from typing import Any, Literal
 
 import json
+import re
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 
 SHORT_TEXT_MAX = 500
@@ -16,6 +17,14 @@ URL_TEXT_MAX = 2_048
 def _strip_text(value: Any) -> Any:
     if isinstance(value, str):
         return value.strip()
+    return value
+
+
+def _normalize_genre_text(value: Any) -> Any:
+    if isinstance(value, str):
+        normalized = re.sub(r"\s*/\s*", " / ", value)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized or None
     return value
 
 
@@ -61,6 +70,7 @@ class TrackUpsert(BaseModel):
 class TrackRecord(TrackUpsert):
     id: int
     album_id: int
+    liked_at: str | None = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -132,7 +142,9 @@ class AlbumUpsert(BaseModel):
         mode="before",
     )
     @classmethod
-    def strip_optional_text(cls, value: Any) -> Any:
+    def strip_optional_text(cls, value: Any, info: ValidationInfo) -> Any:
+        if info.field_name == "genre":
+            return _normalize_genre_text(value)
         return _strip_text(value)
 
 
@@ -319,6 +331,11 @@ class ArtistDraftData(BaseModel):
     origin: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
     genre: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
 
+    @field_validator("genre", mode="before")
+    @classmethod
+    def normalize_genre(cls, value: Any) -> Any:
+        return _normalize_genre_text(value)
+
 
 class AlbumDraftData(BaseModel):
     artist_name: str = Field(max_length=SHORT_TEXT_MAX)
@@ -334,6 +351,11 @@ class AlbumDraftData(BaseModel):
     cover_source_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
     notes: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
     tracks: list[ImportTrackDraft] = Field(default_factory=list)
+
+    @field_validator("genre", mode="before")
+    @classmethod
+    def normalize_genre(cls, value: Any) -> Any:
+        return _normalize_genre_text(value)
 
 
 class ImportDraftRecord(BaseModel):

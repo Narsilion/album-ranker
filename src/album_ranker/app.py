@@ -19,6 +19,7 @@ from album_ranker.importer import (
     infer_cover_source_url_from_album_url,
     metal_archives_album_draft_from_url,
     metal_archives_artist_url_from_album_url,
+    wikipedia_artist_url_from_name,
 )
 from album_ranker.openai_client import AlbumWriteupAIClient
 from album_ranker.schemas import (
@@ -50,6 +51,7 @@ from album_ranker.schemas import (
     ReorderListItemsRequest,
     SettingsRecord,
     SettingsUpdateRequest,
+    TrackRecord,
     TrackUpsert,
     WriteupDraftRequest,
     WriteupDraftResponse,
@@ -478,6 +480,13 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.patch("/api/tracks/{track_id}/like", response_model=TrackRecord)
+    async def patch_track_like(track_id: int) -> TrackRecord:
+        try:
+            return db.toggle_track_like(track_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.post("/api/albums/{album_id}/cover", response_model=AlbumDetailRecord)
     async def upload_album_cover(album_id: int, file: UploadFile) -> AlbumDetailRecord:
         try:
@@ -714,6 +723,8 @@ def create_app(
         if existing_album is None:
             album_draft = db.create_import_job("album", album_request, draft_to_json(album_data))
         artist_source_url = payload.artist_source_url or metal_archives_artist_url_from_album_url(payload.source_url)
+        if not artist_source_url and "metal-archives.com" not in urlparse(payload.source_url).netloc.lower() and album_data.artist_name:
+            artist_source_url = wikipedia_artist_url_from_name(album_data.artist_name)
         if not artist_source_url and _is_youtube_music_album_url(payload.source_url) and album_data.artist_name:
             artist_source_url = payload.source_url
         if not artist_source_url and _is_alterportal_album_url(payload.source_url) and album_data.artist_name:

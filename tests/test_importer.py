@@ -76,6 +76,18 @@ def test_fetch_with_urllib_rejects_oversized_response(monkeypatch) -> None:
         importer._fetch_with_urllib("https://example.com/huge")
 
 
+@pytest.mark.parametrize(
+    ("origin", "expected"),
+    [
+        ("England", "UK"),
+        ("England, London", "UK, London"),
+        ("London, England", "UK, London"),
+    ],
+)
+def test_common_import_origin_replacements(origin: str, expected: str) -> None:
+    assert importer._normalize_imported_origin(origin) == expected
+
+
 def test_curl_fetch_uses_timeout_size_and_http_protocol_limits(monkeypatch) -> None:
     captured = {}
 
@@ -260,6 +272,66 @@ def test_metadata_importer_delegates_source_and_writeup_responsibilities() -> No
     assert artist_draft.artist_name == "Delegated Band"
     assert writeup_text == "Delegated Band - Delegated Album"
     assert metadata_importer.last_diagnostics == {"mode": "fake_source"}
+
+
+def test_album_writeup_prompt_links_youtube_music_when_stream_url_is_youtube(monkeypatch) -> None:
+    monkeypatch.setattr(importer, "_fetch_url_excerpt", lambda url: "")
+    captured = {}
+
+    class FakeClient:
+        def generate_json(self, **kwargs):
+            captured["prompt"] = kwargs["user_prompt"]
+            return {"overview": "Generated write-up."}
+
+    generator = importer.AlbumWriteupGenerator(FakeClient())
+    generator.generate_album_writeup(
+        AlbumDetailRecord(
+            id=1,
+            artist_id=1,
+            artist_name="Band",
+            title="Album",
+            album_stream_url="https://music.youtube.com/playlist?list=test",
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        ),
+        language="en",
+        model="gpt-5",
+    )
+
+    prompt = captured["prompt"]
+    assert "[YouTube Music](https://music.youtube.com/...) | Spotify" in prompt
+    assert "'[YouTube Music](url) | Spotify'" in prompt
+    assert "[Spotify](https://open.spotify.com/...)" not in prompt
+
+
+def test_album_writeup_prompt_links_spotify_when_stream_url_is_spotify(monkeypatch) -> None:
+    monkeypatch.setattr(importer, "_fetch_url_excerpt", lambda url: "")
+    captured = {}
+
+    class FakeClient:
+        def generate_json(self, **kwargs):
+            captured["prompt"] = kwargs["user_prompt"]
+            return {"overview": "Generated write-up."}
+
+    generator = importer.AlbumWriteupGenerator(FakeClient())
+    generator.generate_album_writeup(
+        AlbumDetailRecord(
+            id=1,
+            artist_id=1,
+            artist_name="Band",
+            title="Album",
+            album_stream_url="https://open.spotify.com/album/test",
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        ),
+        language="en",
+        model="gpt-5",
+    )
+
+    prompt = captured["prompt"]
+    assert "YouTube Music | [Spotify](https://open.spotify.com/...)" in prompt
+    assert "'YouTube Music | [Spotify](url)'" in prompt
+    assert "[YouTube Music](https://music.youtube.com/...)" not in prompt
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -459,7 +531,7 @@ def test_best_effort_artist_draft_parses_metal_archives_band_page(monkeypatch) -
         <dl class="float_left">
           <dt>Country of origin:</dt><dd>Finland</dd>
           <dt>Location:</dt><dd>Oulu</dd>
-          <dt>Genre:</dt><dd>Gothic Metal</dd>
+          <dt>Genre:</dt><dd>Gothic Metal/Rock</dd>
           <dt>Status:</dt><dd>Active</dd>
         </dl>
       </body>
@@ -478,7 +550,29 @@ def test_best_effort_artist_draft_parses_metal_archives_band_page(monkeypatch) -
     assert draft.external_url == "https://www.metal-archives.com/bands/For_My_Pain.../1020"
     assert draft.description == "Finnish gothic metal band."
     assert draft.origin == "Finland, Oulu"
-    assert draft.genre == "Gothic Metal"
+    assert draft.genre == "Gothic Metal / Rock"
+
+
+def test_metal_archives_artist_draft_normalizes_england_origin_to_uk(monkeypatch) -> None:
+    html = """
+    <html>
+      <head><title>Band - Encyclopaedia Metallum: The Metal Archives</title></head>
+      <body>
+        <h1 class="band_name"><a href="/bands/Band/1">Band</a></h1>
+        <dl>
+          <dt>Country of origin:</dt><dd>England</dd>
+          <dt>Location:</dt><dd>London</dd>
+        </dl>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(source_url="https://www.metal-archives.com/bands/Band/1")
+    )
+
+    assert draft.origin == "UK, London"
 
 
 def test_best_effort_artist_draft_keeps_metal_archives_genre_out_of_description(monkeypatch) -> None:
@@ -529,6 +623,70 @@ def test_best_effort_artist_draft_extracts_description(monkeypatch) -> None:
 
     assert draft.artist_name == "Scythe of Mephisto"
     assert draft.description == "Scythe of Mephisto is a Serbian black metal project."
+
+
+def test_wikipedia_artist_url_from_name_returns_verified_existing_page(monkeypatch) -> None:
+    monkeypatch.setattr(
+        importer,
+        "_fetch_wikipedia_page_info",
+        lambda title: {
+            "title": "The Smashing Pumpkins",
+            "fullurl": "https://en.wikipedia.org/wiki/The_Smashing_Pumpkins",
+            "pageprops": {"wikibase-shortdesc": "American alternative rock band"},
+        },
+    )
+    monkeypatch.setattr(importer, "_fetch_wikipedia_search_titles", lambda artist_name: [])
+
+    assert importer.wikipedia_artist_url_from_name("The Smashing Pumpkins") == "https://en.wikipedia.org/wiki/The_Smashing_Pumpkins"
+
+
+def test_wikipedia_artist_url_from_name_returns_none_for_missing_page(monkeypatch) -> None:
+    monkeypatch.setattr(importer, "_fetch_wikipedia_page_info", lambda title: None)
+    monkeypatch.setattr(importer, "_fetch_wikipedia_search_titles", lambda artist_name: [])
+
+    assert importer.wikipedia_artist_url_from_name("Port Noir") is None
+
+
+def test_wikipedia_artist_url_from_name_rejects_matching_non_music_page(monkeypatch) -> None:
+    def fake_page_info(title: str) -> dict[str, object] | None:
+        if title == "Port Noir":
+            return None
+        if title == "Port-Noir":
+            return {
+                "title": "Port-Noir",
+                "fullurl": "https://en.wikipedia.org/wiki/Port-Noir",
+                "pageprops": {"wikibase-shortdesc": "Marina like harbor in Geneva, Switzerland"},
+            }
+        return None
+
+    monkeypatch.setattr(importer, "_fetch_wikipedia_page_info", fake_page_info)
+    monkeypatch.setattr(importer, "_fetch_wikipedia_search_titles", lambda artist_name: ["Port-Noir"])
+
+    assert importer.wikipedia_artist_url_from_name("Port Noir") is None
+
+
+def test_wikipedia_artist_url_from_name_prefers_band_disambiguation(monkeypatch) -> None:
+    def fake_page_info(title: str) -> dict[str, object] | None:
+        if title == "Port Noir":
+            return None
+        if title == "Port Noir (band)":
+            return {
+                "title": "Port Noir (band)",
+                "fullurl": "https://en.wikipedia.org/wiki/Port_Noir_(band)",
+                "pageprops": {"wikibase-shortdesc": "Swedish rock band"},
+            }
+        if title == "Port-Noir":
+            return {
+                "title": "Port-Noir",
+                "fullurl": "https://en.wikipedia.org/wiki/Port-Noir",
+                "pageprops": {"wikibase-shortdesc": "Marina like harbor in Geneva, Switzerland"},
+            }
+        return None
+
+    monkeypatch.setattr(importer, "_fetch_wikipedia_page_info", fake_page_info)
+    monkeypatch.setattr(importer, "_fetch_wikipedia_search_titles", lambda artist_name: ["Port-Noir", "Port Noir (band)"])
+
+    assert importer.wikipedia_artist_url_from_name("Port Noir") == "https://en.wikipedia.org/wiki/Port_Noir_(band)"
 
 
 def test_wikipedia_artist_draft_normalizes_origin_country_first(monkeypatch) -> None:
@@ -1191,6 +1349,65 @@ def test_ytm_artist_draft_uses_artist_page_description(monkeypatch) -> None:
     assert draft.external_url == "https://music.youtube.com/@bearsdenmusic"
 
 
+def test_bandcamp_artist_draft_moves_location_out_of_description(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <title>Music | Witch Fever</title>
+        <meta name="description" content="
+Witch Fever.
+Manchester, UK.
+">
+        <meta property="og:title" content="Witch Fever">
+        <meta property="og:description" content="">
+      </head>
+      <body>
+        <p id="band-name-location">
+          <span class="title">Witch Fever</span>
+          <span class="location secondaryText">Manchester, UK</span>
+        </p>
+        <div class="signed-out-artists-bio-text"></div>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(source_url="https://witchfever.bandcamp.com/music")
+    )
+
+    assert draft.artist_name == "Witch Fever"
+    assert draft.origin == "UK, Manchester"
+    assert draft.description is None
+    assert draft.external_url == "https://witchfever.bandcamp.com/music"
+
+
+def test_bandcamp_artist_draft_keeps_real_bio_description(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Example Band">
+        <meta name="description" content="Example Band. Leeds, UK.">
+      </head>
+      <body>
+        <span class="location secondaryText">Leeds, UK</span>
+        <div class="signed-out-artists-bio-text">
+          Noisy post-punk from northern England.
+        </div>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(source_url="https://exampleband.bandcamp.com/music")
+    )
+
+    assert draft.artist_name == "Example Band"
+    assert draft.origin == "UK, Leeds"
+    assert draft.description == "Noisy post-punk from northern England."
+
+
 def test_alterportal_album_draft_parses_page(monkeypatch) -> None:
     html = """
     <html>
@@ -1241,6 +1458,47 @@ def test_alterportal_album_draft_parses_page(monkeypatch) -> None:
     assert draft.album_type == "Full-length"
 
 
+def test_alterportal_album_draft_parses_current_wrapped_fields_and_track_durations(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="The Haunted Youth - Boys Cry Too (2026)">
+        <meta property="og:image" content="https://i.ibb.co/sphL1BHj/600px-cover.jpg">
+      </head>
+      <body>
+        <b><span style="color:#00FF00">Стиль</span></b>: <b>Indie Rock / Dream Pop</b><br>
+        <b><span style="color:#00FF00">Страна</span></b>: <b>Hasselt, Belgium</b><br>
+        <b><span style="color:#00FF00">Формат</span></b>: <b>MP3 CBR 320Kbps</b><br>
+        <b><span style="color:#00FF00">Дата релиза</span></b>: <b>08.05.2026</b><br><br>
+        <b>Треклист</b>:<br>
+        1. in my head [08:05]<br>
+        2. castlevania [04:03]<br>
+        3. deathwish [03:27]<br>
+        <br>
+        <b>Download:</b><br>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_album_draft(
+        ImportRequest(
+            artist_name="",
+            source_url="https://alterportal.net/2026_albums/189159-the-haunted-youth-boys-cry-too-2026.html",
+        )
+    )
+
+    assert draft.artist_name == "The Haunted Youth"
+    assert draft.album_title == "Boys Cry Too"
+    assert draft.release_year == 2026
+    assert draft.genre == "Indie Rock"
+    assert draft.duration_seconds == 15 * 60 + 35
+    assert draft.cover_source_url == "https://i.ibb.co/sphL1BHj/600px-cover.jpg"
+    assert draft.notes == "Format: MP3 CBR 320Kbps"
+    assert [track.title for track in draft.tracks] == ["In my head", "Castlevania", "Deathwish"]
+    assert [track.duration_seconds for track in draft.tracks] == [8 * 60 + 5, 4 * 60 + 3, 3 * 60 + 27]
+
+
 def test_alterportal_artist_draft_parses_page(monkeypatch) -> None:
     html = """
     <html>
@@ -1268,3 +1526,49 @@ def test_alterportal_artist_draft_parses_page(monkeypatch) -> None:
     assert draft.genre == "Alternative Rock"
     assert draft.description is None
     assert draft.external_url == "https://alterportal.net/2026_albums/189049-earlyrise-the-flood-is-coming-2026.html"
+
+
+def test_alterportal_artist_draft_parses_artist_from_album_url_without_explicit_name(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="The Haunted Youth - Boys Cry Too (2026)">
+      </head>
+      <body>
+        <b><span style="color:#00FF00">Стиль</span></b>: <b>Indie Rock / Dream Pop</b><br>
+        <b><span style="color:#00FF00">Страна</span></b>: <b>Hasselt, Belgium</b><br>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(
+            source_url="https://alterportal.net/2026_albums/189159-the-haunted-youth-boys-cry-too-2026.html",
+        )
+    )
+
+    assert draft.artist_name == "The Haunted Youth"
+    assert draft.origin == "Belgium, Hasselt"
+    assert draft.genre == "Indie Rock"
+
+
+def test_alterportal_artist_draft_normalizes_england_origin_to_uk(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Band - Album (2026)">
+      </head>
+      <body>
+        <b><span style="color:#00FF00">Стиль</span></b>: <b>Alternative Rock</b><br>
+        <b><span style="color:#00FF00">Страна</span></b>: <b>London, England</b><br>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(source_url="https://alterportal.net/2026_albums/1-band-album-2026.html")
+    )
+
+    assert draft.origin == "UK, London"

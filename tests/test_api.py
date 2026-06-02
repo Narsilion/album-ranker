@@ -206,7 +206,7 @@ class SparseAlbumImporter(MetadataImporter):
             description=None,
             external_url=request.source_url,
             origin="Finland, Oulu",
-            genre="Gothic Metal/Rock",
+            genre="Gothic Metal / Rock",
         )
 
     def generate_album_writeup(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:  # type: ignore[override]
@@ -254,6 +254,9 @@ def test_manual_album_create_and_render_pages(client) -> None:
 
     assert albums_page.status_code == 200
     assert 'href="/bookmarks"' in albums_page.text
+    assert 'id="albumSearch"' in albums_page.text
+    assert 'placeholder="Search albums…"' in albums_page.text
+    assert "card.dataset.title ||" in albums_page.text
     assert "Genre" in albums_page.text
     assert '<option value="Black Metal">Black Metal</option>' in albums_page.text
     assert "Till Life Do Us Part - EP" in albums_page.text
@@ -283,8 +286,12 @@ def test_manual_album_create_and_render_pages(client) -> None:
     assert ".aa-tab.active" in artist_detail_page.text
     assert 'id="aa-tab-button-import" class="aa-tab secondary active"' in artist_detail_page.text
     assert 'id="aa-tab-button-manual" class="aa-tab secondary"' in artist_detail_page.text
-    assert "Please provide a proper Metal Archives album URL" in artist_detail_page.text
-    assert "Use a Metal Archives album page URL from /albums/" in artist_detail_page.text
+    assert "Please provide an album page URL from Metal Archives, Alterportal" in artist_detail_page.text
+    assert "Use an album page URL from Alterportal, Metal Archives" in artist_detail_page.text
+    assert re.search(
+        r'<div class="input-clear-wrap"[^>]*>\s*<input id="artistRefreshUrlInput"[\s\S]*?<button type="button" class="input-clear-btn" aria-label="Clear">',
+        artist_detail_page.text,
+    )
     assert "Album Import" not in albums_page.text
     assert "Album Import" not in artists_page.text
     assert 'class="album-bookmark-toggle cover-bookmark-btn"' in albums_page.text
@@ -302,6 +309,13 @@ def test_album_detail_refresh_source_url_is_hidden_until_refresh_panel_opens(cli
     assert 'id="albumRefreshBtn"' in page.text
     assert 'id="albumRefreshSourcePanel" class="hidden"' in page.text
     assert 'id="albumRefreshUrlInput"' in page.text
+    assert re.search(
+        r'<div class="input-clear-wrap"[^>]*>\s*<input id="albumRefreshUrlInput"[\s\S]*?<button type="button" class="input-clear-btn" aria-label="Clear">',
+        page.text,
+    )
+    assert 'id="albumListeningActionsTitle">Listening' in page.text
+    assert 'id="albumManagementActionsTitle">Album tools' in page.text
+    assert 'aria-pressed="false">Save for Later' in page.text
 
 
 def test_albums_page_initially_shows_only_20_most_recently_added(client) -> None:
@@ -317,17 +331,27 @@ def test_albums_page_initially_shows_only_20_most_recently_added(client) -> None
     assert 'data-recent-index="20"' in page.text
 
 
-def test_artists_page_initially_shows_only_20_most_recently_added(client) -> None:
+def test_artists_page_initially_shows_only_20_most_recently_active(client) -> None:
     for index in range(21):
         _create_album(client, artist_name=f"Band {index:02d}", title="Debut")
+    _create_album(client, artist_name="Band 00", title="New Activity")
 
     page = client.get("/artists")
 
     assert page.status_code == 200
     assert 'id="artistFilterHint"' in page.text
+    assert "Showing the 20 most recently active artists" in page.text
     assert page.text.count('class="artist-card hidden"') == 1
     assert 'data-recent-index="0"' in page.text
     assert 'data-recent-index="20"' in page.text
+    assert re.search(
+        r'<article class="artist-card"[^>]*data-name="band 00"[^>]*data-recent-index="0"',
+        page.text,
+    )
+    assert re.search(
+        r'<article class="artist-card hidden"[^>]*data-name="band 01"[^>]*data-recent-index="20"',
+        page.text,
+    )
 
 
 def test_genres_page_supports_manual_create_and_delete(client) -> None:
@@ -979,6 +1003,7 @@ def test_bookmarked_album_detail_shows_independent_bookmark_and_listened_actions
     assert 'class="secondary album-bookmark-toggle"' in page.text
     assert "Remove from Later" in page.text
     assert "Mark Listened" in page.text
+    assert page.text.index("Mark Listened") < page.text.index("Remove from Later")
 
 
 def test_list_pages_expose_album_bookmark_controls(client) -> None:
@@ -1634,7 +1659,7 @@ def test_album_with_artist_import_repairs_sparse_ai_draft_with_real_metal_archiv
     assert payload["duration_seconds"] == 3092
     assert payload["cover_source_url"] == "https://www.metal-archives.com/images/1/3/9/1/1391127.jpg?3823"
     assert payload["album_type"] == "Full-length"
-    assert payload["genre"] == "Gothic Metal/Rock"
+    assert payload["genre"] == "Gothic Metal / Rock"
     assert payload["notes"] == "Label: Rainheart Productions\nFormat: Digital"
     assert payload["tracks"][0]["title"] == "Hungry for Desire"
 
@@ -1872,6 +1897,147 @@ def test_album_with_artist_import_uses_supplied_ytm_artist_source_url(settings, 
     assert body["artist_draft"]["draft_payload"]["external_url"] == artist_url
 
 
+def test_album_with_artist_import_uses_verified_wikipedia_artist_without_artist_source(settings, monkeypatch) -> None:
+    import album_ranker.app as app_module
+    import album_ranker.importer as importer_module
+
+    album_url = "https://music.youtube.com/playlist?list=OLAK5uy_nDuyBbbVnE-IBmEd49Nur04_8ppK_DEKo"
+    wiki_url = "https://en.wikipedia.org/wiki/The_Smashing_Pumpkins"
+    album_html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Mellon Collie and the Infinite Sadness - Album by The Smashing Pumpkins">
+        <meta property="og:image" content="https://lh3.googleusercontent.com/cover.jpg">
+      </head>
+    </html>
+    """
+    wiki_html = """
+    <html>
+      <head>
+        <title>The Smashing Pumpkins - Wikipedia</title>
+        <meta name="description" content="The Smashing Pumpkins are an American alternative rock band from Chicago.">
+      </head>
+      <body>
+        <table class="infobox">
+          <tr><th>Origin</th><td>Chicago, Illinois, United States</td></tr>
+          <tr><th>Genres</th><td><ul><li>Alternative rock</li><li>Grunge</li></ul></td></tr>
+        </table>
+      </body>
+    </html>
+    """
+
+    def fake_fetch(url: str) -> tuple[str, str]:
+        if url == album_url:
+            return album_html, "text/html"
+        if url == wiki_url:
+            return wiki_html, "text/html"
+        raise AssertionError(f"unexpected URL: {url}")
+
+    monkeypatch.setattr(app_module, "wikipedia_artist_url_from_name", lambda artist_name: wiki_url)
+    monkeypatch.setattr(importer_module, "_fetch_url_document", fake_fetch)
+    monkeypatch.setattr(importer_module, "_fetch_ytm_full_page", lambda url: "")
+    monkeypatch.setattr(importer_module, "_extract_yt_playlist_tracks", lambda playlist_id: [])
+    app = create_app(settings, importer=MetadataImporter(client=None), cover_downloader=CoverDownloader(settings.cover_dir))
+    local_client = TestClient(app)
+
+    response = local_client.post(
+        "/api/import/album-with-artist",
+        json={"source_url": album_url},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["artist_source_url"] == wiki_url
+    assert body["artist_draft"]["draft_payload"]["artist_name"] == "The Smashing Pumpkins"
+    assert body["artist_draft"]["draft_payload"]["external_url"] == wiki_url
+    assert body["artist_draft"]["draft_payload"]["origin"] == "USA, Chicago, Illinois"
+    assert body["album_draft"]["draft_payload"]["artist_name"] == "The Smashing Pumpkins"
+    assert body["album_draft"]["draft_payload"]["album_title"] == "Mellon Collie and the Infinite Sadness"
+
+
+def test_album_with_artist_import_reuses_ytm_album_url_when_wikipedia_artist_missing(settings, monkeypatch) -> None:
+    import album_ranker.app as app_module
+    import album_ranker.importer as importer_module
+
+    album_url = "https://music.youtube.com/playlist?list=OLAK5uy_muc558DKqCMVDF7_b_8oAWL4aeZp8SwM4"
+    album_html = """
+    <html>
+      <head>
+        <meta property="og:title" content="The New Routine - Album by Port Noir">
+        <meta property="og:image" content="https://lh3.googleusercontent.com/cover.jpg">
+      </head>
+    </html>
+    """
+
+    def fake_fetch(url: str) -> tuple[str, str]:
+        if url == album_url:
+            return album_html, "text/html"
+        raise AssertionError(f"unexpected URL: {url}")
+
+    monkeypatch.setattr(app_module, "wikipedia_artist_url_from_name", lambda artist_name: None)
+    monkeypatch.setattr(importer_module, "_fetch_url_document", fake_fetch)
+    monkeypatch.setattr(importer_module, "_fetch_ytm_full_page", lambda url: "")
+    monkeypatch.setattr(importer_module, "_extract_yt_playlist_tracks", lambda playlist_id: [])
+    app = create_app(settings, importer=MetadataImporter(client=None), cover_downloader=CoverDownloader(settings.cover_dir))
+    local_client = TestClient(app)
+
+    response = local_client.post(
+        "/api/import/album-with-artist",
+        json={"source_url": album_url},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["artist_source_url"] == album_url
+    assert body["artist_draft"]["draft_payload"]["artist_name"] == "Port Noir"
+    assert body["artist_draft"]["draft_payload"]["external_url"] == album_url
+    assert body["artist_draft"]["draft_payload"]["description"] is None
+    assert body["album_draft"]["draft_payload"]["artist_name"] == "Port Noir"
+    assert body["album_draft"]["draft_payload"]["album_title"] == "The New Routine"
+
+
+def test_album_with_artist_import_parses_alterportal_album_and_artist(settings, monkeypatch) -> None:
+    import album_ranker.importer as importer_module
+
+    album_url = "https://alterportal.net/2026_albums/189159-the-haunted-youth-boys-cry-too-2026.html"
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="The Haunted Youth - Boys Cry Too (2026)">
+        <meta property="og:image" content="https://i.ibb.co/sphL1BHj/600px-cover.jpg">
+      </head>
+      <body>
+        <b><span style="color:#00FF00">Стиль</span></b>: <b>Indie Rock / Dream Pop</b><br>
+        <b><span style="color:#00FF00">Страна</span></b>: <b>Hasselt, Belgium</b><br>
+        <b><span style="color:#00FF00">Формат</span></b>: <b>MP3 CBR 320Kbps</b><br>
+        <b><span style="color:#00FF00">Дата релиза</span></b>: <b>08.05.2026</b><br><br>
+        <b>Треклист</b>:<br>
+        1. in my head [08:05]<br>
+        2. castlevania [04:03]<br>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer_module, "_fetch_url_document", lambda url: (html, "text/html"))
+    app = create_app(settings, importer=MetadataImporter(None), cover_downloader=CoverDownloader(settings.cover_dir))
+    local_client = TestClient(app)
+
+    response = local_client.post(
+        "/api/import/album-with-artist",
+        json={"source_url": album_url},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["artist_source_url"] == album_url
+    assert body["artist_draft"]["draft_payload"]["artist_name"] == "The Haunted Youth"
+    assert body["artist_draft"]["draft_payload"]["origin"] == "Belgium, Hasselt"
+    assert body["album_draft"]["draft_payload"]["artist_name"] == "The Haunted Youth"
+    assert body["album_draft"]["draft_payload"]["album_title"] == "Boys Cry Too"
+    assert body["album_draft"]["draft_payload"]["genre"] == "Indie Rock"
+    assert body["album_draft"]["draft_payload"]["duration_seconds"] == 12 * 60 + 8
+    assert body["album_draft"]["draft_payload"]["tracks"][0]["duration_seconds"] == 8 * 60 + 5
+
+
 def test_album_with_artist_confirm_creates_artist_and_album(client, monkeypatch) -> None:
     import album_ranker.app as app_module
 
@@ -1927,6 +2093,69 @@ def test_album_with_artist_confirm_creates_artist_and_album(client, monkeypatch)
     assert body["album"]["id"]
     assert body["album"]["artist_name"] == "For My Pain..."
     assert client.get(f"/albums/{body['album']['id']}").status_code == 200
+
+
+def test_album_confirmed_from_imports_page_appears_in_latest_added_albums(client, monkeypatch) -> None:
+    import album_ranker.app as app_module
+
+    for index in range(20):
+        _create_album(client, artist_name="Existing Band", title=f"Existing Album {index:02d}")
+
+    monkeypatch.setattr(
+        app_module,
+        "metal_archives_artist_url_from_album_url",
+        lambda url: "https://www.metal-archives.com/bands/For_My_Pain.../1020",
+    )
+    draft_response = client.post(
+        "/api/import/album-with-artist",
+        json={
+            "artist_name": "",
+            "album_title": None,
+            "source_url": "https://www.metal-archives.com/albums/For_My_Pain.../Buried_Blue/1391127",
+        },
+    ).json()
+
+    confirm = client.post(
+        "/api/import/album-with-artist/confirm",
+        json={
+            "artist_draft_id": draft_response["artist_draft"]["id"],
+            "artist_chosen_source_url": "https://www.metal-archives.com/bands/For_My_Pain.../1020",
+            "artist_payload": {
+                "name": "For My Pain...",
+                "description": "Edited artist description",
+                "external_url": "https://www.metal-archives.com/bands/For_My_Pain.../1020",
+                "origin": "Finland, Oulu",
+            },
+            "album_draft_id": draft_response["album_draft"]["id"],
+            "album_chosen_source_url": "https://www.metal-archives.com/albums/For_My_Pain.../Buried_Blue/1391127",
+            "album_payload": {
+                "artist_name": "For My Pain...",
+                "artist_description": "Edited artist description",
+                "album_external_url": "https://www.metal-archives.com/albums/For_My_Pain.../Buried_Blue/1391127",
+                "album_stream_url": None,
+                "album_type": "Single",
+                "title": "Buried Blue",
+                "release_year": 2026,
+                "genre": "Gothic Metal",
+                "rating": None,
+                "duration_seconds": 2520,
+                "cover_image_path": None,
+                "cover_source_url": None,
+                "notes": "Imported",
+                "tracks": [],
+            },
+        },
+    )
+    assert confirm.status_code == 200
+
+    page = client.get("/albums")
+
+    assert page.status_code == 200
+    assert re.search(
+        r'<article class="album-card"[^>]*data-artist="For My Pain\.\.\."[^>]*data-title="Buried Blue"[^>]*data-recent-index="0"',
+        page.text,
+    )
+    assert page.text.count('class="album-card hidden"') == 1
 
 
 def test_album_with_artist_confirm_updates_existing_album(client, monkeypatch) -> None:
@@ -2007,7 +2236,7 @@ def test_imports_page_renders_bundle_flow(client) -> None:
     assert "setArtistDraftEnabled(Boolean(artistDraft))" in page.text
     assert 'id="albumWithArtistArtistSourceUrl" name="artist_source_url"' in page.text
     assert 'value("bundleArtistDraftId")' in page.text
-    assert "Please provide a proper Metal Archives album URL" in page.text
+    assert "Please provide an album page URL from Metal Archives, Alterportal" in page.text
     assert "Use the album page URL" in page.text
     assert "/api/import/album-with-artist" in page.text
 
@@ -2227,3 +2456,59 @@ def test_generate_writeup_missing_album(client) -> None:
         json={"language": "en"},
     )
     assert resp.status_code == 404
+
+
+def test_track_like_toggle(client) -> None:
+    album = client.post(
+        "/api/albums",
+        json={
+            "artist_name": "Triptykon",
+            "title": "Eparistera Daimones",
+            "release_year": 2010,
+            "genre": "Black Metal",
+            "duration_seconds": 3600,
+            "cover_image_path": None,
+            "cover_source_url": None,
+            "notes": None,
+            "tracks": [{"track_number": 1, "title": "Goetia", "duration_seconds": 420, "position": 1}],
+        },
+    ).json()
+    album_id = album["id"]
+
+    detail = client.get(f"/api/albums/{album_id}").json()
+    track_id = detail["tracks"][0]["id"]
+    assert detail["tracks"][0]["liked_at"] is None
+
+    liked = client.patch(f"/api/tracks/{track_id}/like")
+    assert liked.status_code == 200
+    assert liked.json()["liked_at"] is not None
+
+    unliked = client.patch(f"/api/tracks/{track_id}/like")
+    assert unliked.status_code == 200
+    assert unliked.json()["liked_at"] is None
+
+
+def test_track_like_missing_track_returns_404(client) -> None:
+    resp = client.patch("/api/tracks/99999/like")
+    assert resp.status_code == 404
+
+
+def test_album_detail_page_shows_track_like_buttons(client) -> None:
+    album = client.post(
+        "/api/albums",
+        json={
+            "artist_name": "Triptykon",
+            "title": "Melana Chasmata",
+            "release_year": 2014,
+            "genre": "Black Metal",
+            "duration_seconds": 3600,
+            "cover_image_path": None,
+            "cover_source_url": None,
+            "notes": None,
+            "tracks": [{"track_number": 1, "title": "Tree of Suffocating Souls", "duration_seconds": 360, "position": 1}],
+        },
+    ).json()
+
+    page = client.get(f"/albums/{album['id']}")
+    assert page.status_code == 200
+    assert "track-like-btn" in page.text

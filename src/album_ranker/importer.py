@@ -9,7 +9,7 @@ from html import unescape as _html_unescape
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import quote, unquote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from album_ranker.openai_client import AlbumWriteupAIClient, OpenAIClientError
@@ -92,6 +92,47 @@ def _strip_html(html: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+_COMMON_IMPORTED_TEXT_REPLACEMENTS = {
+    "england": "UK",
+}
+
+
+def _apply_common_import_replacements(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return _COMMON_IMPORTED_TEXT_REPLACEMENTS.get(stripped.lower(), stripped)
+
+
+def _normalize_imported_origin(origin: str | None) -> str | None:
+    if not origin:
+        return None
+    cleaned = re.sub(r"\s+,", ",", origin)
+    cleaned = re.sub(r",\s*", ", ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,")
+    if not cleaned:
+        return None
+    parts = [part.strip() for part in cleaned.split(",") if part.strip()]
+    if not parts:
+        return None
+    parts = [_apply_common_import_replacements(part) or part for part in parts]
+    if parts[0] == "UK":
+        return ", ".join(parts)
+    if parts[-1] == "UK":
+        return ", ".join(["UK", *parts[:-1]])
+    return ", ".join(parts)
+
+
+def _normalize_imported_genre(genre: str | None) -> str | None:
+    if not genre:
+        return None
+    normalized = re.sub(r"\s*/\s*", " / ", genre)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized or None
+
+
 def _clean_wikipedia_text(text: str) -> str:
     text = re.sub(r"(?:\[\s*\d+(?:\s*,\s*\d+)*\s*\]\s*)+", "", text)
     return re.sub(r"\s+", " ", text).strip()
@@ -153,6 +194,214 @@ def _host_label(url: str | None) -> str | None:
         return None
     parsed = urlparse(url)
     return parsed.netloc or None
+
+
+def _wikipedia_artist_key(value: str | None) -> str:
+    text = (value or "").lower()
+    text = re.sub(r"\([^)]*\)", " ", text)
+    text = text.replace("&", " and ")
+    return re.sub(r"[^a-z0-9]+", "", text)
+
+
+def _wikipedia_url_for_title(title: str) -> str:
+    page = re.sub(r"\s+", "_", title.strip())
+    return f"https://en.wikipedia.org/wiki/{quote(page, safe='()_-')}"
+
+
+def _wikipedia_title_from_metadata(metadata: dict[str, Any]) -> str | None:
+    title = str(metadata.get("title") or "").strip()
+    if not title:
+        return None
+    title = re.sub(r"\s+-\s+Wikipedia\s*$", "", title).strip()
+    if not title or title.lower() in {"search results", "wikipedia"}:
+        return None
+    return title
+
+
+def _wikipedia_artist_title_matches(artist_name: str, page_title: str | None) -> bool:
+    artist_key = _wikipedia_artist_key(artist_name)
+    page_key = _wikipedia_artist_key(page_title)
+    if not artist_key or not page_key:
+        return False
+    return page_key == artist_key
+
+
+_WIKIPEDIA_MUSIC_TITLE_HINTS = (
+    "band",
+    "musician",
+    "singer",
+    "rapper",
+    "songwriter",
+    "record producer",
+    "dj",
+    "composer",
+)
+_WIKIPEDIA_MUSIC_ARTIST_TEXT_RE = re.compile(
+    r"\b("
+    r"band|musical group|music group|rock group|metal group|"
+    r"singer|musician|rapper|songwriter|record producer|disc jockey|dj|composer|"
+    r"vocalist|guitarist|bassist|drummer|keyboardist|multi-instrumentalist"
+    r")\b",
+    re.IGNORECASE,
+)
+_WIKIPEDIA_NON_ARTIST_TEXT_RE = re.compile(
+    r"\b(harbour|harbor|marina|quai|lake|river|building|street|road|station|village|town|city|commune)\b",
+    re.IGNORECASE,
+)
+
+
+def _wikipedia_music_title_priority(title: str) -> int:
+    lowered = title.lower()
+    for index, hint in enumerate(_WIKIPEDIA_MUSIC_TITLE_HINTS):
+        if f"({hint})" in lowered:
+            return index
+    return len(_WIKIPEDIA_MUSIC_TITLE_HINTS)
+
+
+def _wikipedia_page_looks_like_music_artist(page_info: dict[str, Any]) -> bool:
+    title = str(page_info.get("title") or "")
+    if _wikipedia_music_title_priority(title) < len(_WIKIPEDIA_MUSIC_TITLE_HINTS):
+        return True
+
+    pageprops = page_info.get("pageprops")
+    short_description = ""
+    if isinstance(pageprops, dict):
+        short_description = str(
+            pageprops.get("wikibase-shortdesc")
+            or pageprops.get("description")
+            or pageprops.get("shortdesc")
+            or ""
+        )
+    if short_description and _WIKIPEDIA_MUSIC_ARTIST_TEXT_RE.search(short_description):
+        return True
+    if short_description and _WIKIPEDIA_NON_ARTIST_TEXT_RE.search(short_description):
+        return False
+
+    categories = page_info.get("categories")
+    if isinstance(categories, list):
+        category_text = " ".join(
+            str(category.get("title") or "") for category in categories if isinstance(category, dict)
+        )
+        if _WIKIPEDIA_MUSIC_ARTIST_TEXT_RE.search(category_text):
+            return True
+        if category_text and _WIKIPEDIA_NON_ARTIST_TEXT_RE.search(category_text):
+            return False
+
+    return False
+
+
+def _verified_wikipedia_artist_url(artist_name: str, url: str) -> str | None:
+    parsed = urlparse(url)
+    title = unquote(parsed.path.rsplit("/", 1)[-1]).replace("_", " ") if parsed.path else ""
+    page_info = _fetch_wikipedia_page_info(title)
+    if not page_info:
+        return None
+    page_title = str(page_info.get("title") or "")
+    if not _wikipedia_artist_title_matches(artist_name, page_title):
+        return None
+    if not _wikipedia_page_looks_like_music_artist(page_info):
+        return None
+    page_url = str(page_info.get("fullurl") or "").strip()
+    return page_url or _wikipedia_url_for_title(page_title)
+
+
+def _fetch_wikipedia_page_info(title: str) -> dict[str, Any] | None:
+    title = title.strip()
+    if not title:
+        return None
+    query = urlencode(
+        {
+            "action": "query",
+            "titles": title,
+            "prop": "info|pageprops|categories",
+            "inprop": "url",
+            "cllimit": "max",
+            "redirects": "1",
+            "format": "json",
+        }
+    )
+    url = f"https://en.wikipedia.org/w/api.php?{query}"
+    _validate_source_url(url)
+    request = Request(url, headers={**DEFAULT_HEADERS, "Accept": "application/json"})
+    with urlopen(request, timeout=SOURCE_FETCH_TIMEOUT_SECONDS) as response:
+        content_type = response.headers.get("Content-Type", "")
+        if "json" not in content_type.lower():
+            return None
+        raw_bytes = response.read(MAX_SOURCE_BYTES + 1)
+        if len(raw_bytes) > MAX_SOURCE_BYTES:
+            return None
+    try:
+        data = json.loads(raw_bytes.decode("utf-8", errors="ignore"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    pages = data.get("query", {}).get("pages", {}) if isinstance(data, dict) else {}
+    if not isinstance(pages, dict):
+        return None
+    for page in pages.values():
+        if isinstance(page, dict) and "missing" not in page:
+            return page
+    return None
+
+
+def _fetch_wikipedia_search_titles(artist_name: str) -> list[str]:
+    query = urlencode(
+        {
+            "action": "query",
+            "list": "search",
+            "srsearch": artist_name,
+            "srlimit": "5",
+            "format": "json",
+        }
+    )
+    url = f"https://en.wikipedia.org/w/api.php?{query}"
+    _validate_source_url(url)
+    request = Request(url, headers={**DEFAULT_HEADERS, "Accept": "application/json"})
+    with urlopen(request, timeout=SOURCE_FETCH_TIMEOUT_SECONDS) as response:
+        content_type = response.headers.get("Content-Type", "")
+        if "json" not in content_type.lower():
+            return []
+        raw_bytes = response.read(MAX_SOURCE_BYTES + 1)
+        if len(raw_bytes) > MAX_SOURCE_BYTES:
+            return []
+    try:
+        data = json.loads(raw_bytes.decode("utf-8", errors="ignore"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return []
+    results = data.get("query", {}).get("search", []) if isinstance(data, dict) else []
+    titles: list[str] = []
+    for result in results:
+        if isinstance(result, dict):
+            title = str(result.get("title") or "").strip()
+            if title:
+                titles.append(title)
+    return titles
+
+
+def wikipedia_artist_url_from_name(artist_name: str | None) -> str | None:
+    artist_name = (artist_name or "").strip()
+    if not artist_name:
+        return None
+    direct_url = _wikipedia_url_for_title(artist_name)
+    try:
+        verified = _verified_wikipedia_artist_url(artist_name, direct_url)
+    except (HTTPError, URLError, TimeoutError, ValueError, OSError):
+        verified = None
+    if verified:
+        return verified
+    try:
+        titles = _fetch_wikipedia_search_titles(artist_name)
+    except (HTTPError, URLError, TimeoutError, ValueError, OSError):
+        titles = []
+    for title in sorted(titles, key=_wikipedia_music_title_priority):
+        if not _wikipedia_artist_title_matches(artist_name, title):
+            continue
+        try:
+            verified = _verified_wikipedia_artist_url(artist_name, _wikipedia_url_for_title(title))
+        except (HTTPError, URLError, TimeoutError, ValueError, OSError):
+            verified = None
+        if verified:
+            return verified
+    return None
 
 
 def _is_youtube_music_album_source_url(url: str | None) -> bool:
@@ -381,8 +630,8 @@ def _metal_archives_artist_draft(request: ImportRequest, html: str, metadata: di
     country = details.get("Country of origin")
     location = details.get("Location")
     origin_parts = [part for part in [country, location] if part]
-    origin = ", ".join(origin_parts) or None
-    genre = details.get("Genre") or details.get("Genre(s)")
+    origin = _normalize_imported_origin(", ".join(origin_parts) or None)
+    genre = _normalize_imported_genre(details.get("Genre") or details.get("Genre(s)"))
     description = metadata.get("description")
     if not description:
         formed = details.get("Formed in")
@@ -425,6 +674,65 @@ def _extract_bandcamp_ld_json(html: str) -> dict[str, Any] | None:
         if isinstance(data, dict) and data.get("@type") in ("MusicAlbum", "Album"):
             return data
     return None
+
+
+def _extract_bandcamp_artist_location(html: str) -> str | None:
+    location_match = re.search(
+        r'(?is)<span[^>]+class=["\'][^"\']*\blocation\b[^"\']*["\'][^>]*>(.*?)</span>',
+        html,
+    )
+    if location_match:
+        return _normalize_imported_origin(_strip_html(location_match.group(1)))
+    return None
+
+
+def _extract_bandcamp_artist_bio(html: str) -> str | None:
+    bio_match = re.search(
+        r'(?is)<div[^>]+class=["\'][^"\']*\bsigned-out-artists-bio-text\b[^"\']*["\'][^>]*>(.*?)</div>',
+        html,
+    )
+    if bio_match:
+        return _strip_html(bio_match.group(1)) or None
+    return None
+
+
+def _bandcamp_description_without_name_origin(description: str | None, artist_name: str, origin: str | None) -> str | None:
+    if not description:
+        return None
+    cleaned = re.sub(r"\s+", " ", description).strip()
+    if not cleaned:
+        return None
+    fragments = [part.strip() for part in re.split(r"\s*\.\s*", cleaned) if part.strip()]
+    removable = {artist_name.lower()}
+    if origin:
+        removable.add(origin.lower())
+    remaining = [
+        part
+        for part in fragments
+        if part.lower() not in removable and (_normalize_imported_origin(part) or "").lower() not in removable
+    ]
+    return ". ".join(remaining) or None
+
+
+def _bandcamp_artist_draft(request: ImportRequest, html: str, metadata: dict[str, Any]) -> ArtistDraftData:
+    artist_name = request.artist_name.strip()
+    if not artist_name:
+        title = str(metadata.get("title") or "").strip()
+        artist_name = re.sub(r"^\s*Music\s*\|\s*", "", title, flags=re.IGNORECASE).strip()
+    if not artist_name:
+        artist_name = _host_label(request.source_url) or "Unknown Artist"
+    origin = _extract_bandcamp_artist_location(html)
+    description = (
+        _extract_bandcamp_artist_bio(html)
+        or _bandcamp_description_without_name_origin(str(metadata.get("description") or ""), artist_name, origin)
+    )
+    return ArtistDraftData(
+        artist_name=artist_name,
+        description=description,
+        external_url=request.source_url,
+        origin=origin,
+        genre=None,
+    )
 
 
 def _bandcamp_album_draft(request: ImportRequest, html: str, metadata: dict[str, Any]) -> AlbumDraftData:
@@ -630,7 +938,7 @@ def _wikipedia_album_draft(request: ImportRequest, html: str, metadata: dict[str
     release_year = int(year_m.group(0)) if year_m else None
     # Genre: first value only
     genre_raw = infobox.get("Genre") or infobox.get("Genres")
-    genre = re.split(r'[,/\n]', genre_raw)[0].strip() if genre_raw else None
+    genre = _normalize_imported_genre(re.split(r'[,\n]', genre_raw)[0].strip()) if genre_raw else None
     # Total duration — strip spaces from span-wrapped digits like "49 : 47"
     length_str = (infobox.get("Length") or "").strip().replace(" ", "")
     total_seconds = display_to_seconds(length_str) if re.match(r'^\d+:\d+$', length_str) else None
@@ -1316,10 +1624,10 @@ def _normalize_wikipedia_origin(origin: str | None) -> str | None:
     if country is None and country_key in _WIKIPEDIA_COUNTRY_NAMES:
         country = parts[-1]
     if country is None and country_key in _WIKIPEDIA_US_STATE_NAMES:
-        return ", ".join(["USA", *parts])
+        return _normalize_imported_origin(", ".join(["USA", *parts]))
     if country is None:
-        return cleaned
-    return ", ".join([country, *parts[:-1]])
+        return _normalize_imported_origin(cleaned)
+    return _normalize_imported_origin(", ".join([country, *parts[:-1]]))
 
 
 def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
@@ -1349,6 +1657,8 @@ def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
         )
     if "metal-archives.com" in source_label and html:
         return _metal_archives_artist_draft(request, html, metadata)
+    if "bandcamp.com" in source_label and html:
+        return _bandcamp_artist_draft(request, html, metadata)
     if "wikipedia.org" in source_label and html:
         infobox = _extract_wikipedia_infobox(html)
         artist_name = request.artist_name.strip()
@@ -1362,7 +1672,7 @@ def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
         origin = infobox.get("Birthplace") or born_location or infobox.get("Origin")
         origin = _normalize_wikipedia_origin(origin)
         genre_raw = infobox.get("Genre") or infobox.get("Genres")
-        genre = genre_raw.strip() if genre_raw else None
+        genre = _normalize_imported_genre(genre_raw)
         description = metadata.get("description") or _extract_wikipedia_lead_description(html)
         return ArtistDraftData(
             artist_name=artist_name,
@@ -1386,8 +1696,8 @@ def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
             if " - " in title_no_year:
                 artist_name = title_no_year.split(" - ", 1)[0].strip()
         genre_raw = _alterportal_field(clean, "Стиль")
-        genre = re.split(r"\s*/\s*", genre_raw)[0].strip() if genre_raw else None
-        origin = _alterportal_field(clean, "Страна")
+        genre = _normalize_imported_genre(re.split(r"\s*/\s*", genre_raw)[0].strip()) if genre_raw else None
+        origin = _alterportal_origin(_alterportal_field(clean, "Страна"))
         return ArtistDraftData(
             artist_name=artist_name or _host_label(request.source_url) or "Unknown Artist",
             description=None,
@@ -1467,24 +1777,38 @@ def _is_streaming_url(url: str | None) -> bool:
 
 def _alterportal_field(clean_html: str, label: str) -> str | None:
     """Extract a labeled field value from an alterportal page body (HTML comments pre-stripped)."""
-    m = re.search(rf"<b>{re.escape(label)}:</b>(.*?)<br", clean_html, re.IGNORECASE | re.DOTALL)
+    for line in _alterportal_text_lines(clean_html):
+        m = re.match(rf"^{re.escape(label)}\s*:?\s*(.+)$", line, re.IGNORECASE)
+        if m:
+            return m.group(1).strip() or None
+    m = re.search(rf"{re.escape(label)}.*?</b>\s*:?\s*(.*?)<br", clean_html, re.IGNORECASE | re.DOTALL)
     return _strip_html(m.group(1)).strip() or None if m else None
 
 
-def _alterportal_album_draft(request: ImportRequest, html: str, metadata: dict[str, Any]) -> AlbumDraftData:
-    """Build an AlbumDraftData from an alterportal.net album page."""
-    og_title = str(metadata.get("title") or "").strip()
+def _alterportal_text_lines(clean_html: str) -> list[str]:
+    text = re.sub(r"(?i)<br\s*/?>", "\n", clean_html)
+    text = re.sub(r"(?is)<script.*?>.*?</script>", " ", text)
+    text = re.sub(r"(?is)<style.*?>.*?</style>", " ", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = _html_unescape(text)
+    return [re.sub(r"\s+", " ", line).strip() for line in text.splitlines() if line.strip()]
+
+
+def _alterportal_title_parts(og_title: str, request: ImportRequest) -> tuple[str, str, int | None]:
     artist_name = request.artist_name or ""
     album_title = request.album_title or ""
     release_year: int | None = None
-
-    if og_title:
-        year_m = re.search(r"\((\d{4})\)\s*$", og_title)
+    title_part = og_title.strip()
+    if title_part:
+        title_part = re.split(r"\s+»\s+", title_part, maxsplit=1)[0].strip()
+        year_m = re.search(r"\((\d{4})\)\s*$", title_part)
         if year_m:
             release_year = int(year_m.group(1))
-            title_part = og_title[: year_m.start()].strip()
+            title_part = title_part[: year_m.start()].strip()
         else:
-            title_part = og_title
+            slug_year_m = re.search(r"[-_/]((?:19|20)\d{2})(?:\.html)?$", request.source_url or "")
+            if slug_year_m:
+                release_year = int(slug_year_m.group(1))
         if " - " in title_part:
             parts = title_part.split(" - ", 1)
             if not artist_name:
@@ -1493,11 +1817,65 @@ def _alterportal_album_draft(request: ImportRequest, html: str, metadata: dict[s
                 album_title = parts[1].strip()
         elif not album_title:
             album_title = title_part
+    return artist_name, album_title, release_year
+
+
+def _alterportal_tracks(clean_html: str) -> list[dict[str, Any]]:
+    tracks: list[dict[str, Any]] = []
+    in_tracklist = False
+    for line in _alterportal_text_lines(clean_html):
+        if re.match(r"^Треклист\s*:?\s*$", line, re.IGNORECASE):
+            in_tracklist = True
+            continue
+        if not in_tracklist:
+            continue
+        if re.match(r"^(Download|Скачать)\s*:?", line, re.IGNORECASE):
+            break
+        track_m = re.match(r"^0*(\d+)\.\s+(.+?)(?:\s*[\[(]\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*[\])])?\s*$", line)
+        if not track_m:
+            if tracks:
+                break
+            continue
+        title = track_m.group(2).strip()
+        duration_seconds = None
+        if track_m.group(3):
+            try:
+                duration_seconds = display_to_seconds(track_m.group(3))
+            except ValueError:
+                duration_seconds = None
+        if title:
+            tracks.append({"track_number": int(track_m.group(1)), "title": _html_unescape(title), "duration_seconds": duration_seconds})
+    return tracks
+
+
+def _alterportal_release_year(clean_html: str) -> int | None:
+    release_raw = _alterportal_field(clean_html, "Дата релиза")
+    if release_raw:
+        date_m = re.search(r"\b((?:19|20)\d{2})\b", release_raw)
+        if date_m:
+            return int(date_m.group(1))
+    return None
+
+
+def _alterportal_origin(value: str | None) -> str | None:
+    if not value:
+        return None
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    if len(parts) >= 2:
+        return _normalize_imported_origin(", ".join([parts[-1], *parts[:-1]]))
+    return _normalize_imported_origin(value.strip() or None)
+
+
+def _alterportal_album_draft(request: ImportRequest, html: str, metadata: dict[str, Any]) -> AlbumDraftData:
+    """Build an AlbumDraftData from an alterportal.net album page."""
+    og_title = str(metadata.get("title") or "").strip()
+    artist_name, album_title, release_year = _alterportal_title_parts(og_title, request)
 
     clean = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
+    release_year = release_year or _alterportal_release_year(clean)
 
     genre_raw = _alterportal_field(clean, "Стиль")
-    genre = re.split(r"\s*/\s*", genre_raw)[0].strip() if genre_raw else None
+    genre = _normalize_imported_genre(re.split(r"\s*/\s*", genre_raw)[0].strip()) if genre_raw else None
 
     duration_raw = _alterportal_field(clean, "Время звучания")
     duration_seconds: int | None = None
@@ -1506,13 +1884,10 @@ def _alterportal_album_draft(request: ImportRequest, html: str, metadata: dict[s
         if dur_m:
             duration_seconds = int(dur_m.group(1)) * 60 + int(dur_m.group(2) or 0)
 
-    tracks: list[dict[str, Any]] = []
-    tl_m = re.search(r"<b>Треклист:</b>(.*?)(?:<br>\s*<br>|<iframe|$)", clean, re.DOTALL | re.IGNORECASE)
-    if tl_m:
-        for track_m in re.finditer(r"(\d+)\.\s+([^<\n\r]+)", tl_m.group(1)):
-            title = _html_unescape(track_m.group(2).strip())
-            if title:
-                tracks.append({"track_number": int(track_m.group(1)), "title": title, "duration_seconds": None})
+    tracks = _alterportal_tracks(clean)
+    if duration_seconds is None:
+        known_secs = [track["duration_seconds"] for track in tracks if track.get("duration_seconds") is not None]
+        duration_seconds = sum(known_secs) if known_secs else None
 
     format_raw = _alterportal_field(clean, "Формат")
     notes = f"Format: {format_raw}" if format_raw else None
@@ -1650,7 +2025,7 @@ def _merge_album_drafts(ai_data: dict[str, Any], fallback: AlbumDraftData, reque
     merged["album_external_url"] = merged.get("album_external_url") or fallback.album_external_url or request.source_url
     merged["album_stream_url"] = fallback.album_stream_url or merged.get("album_stream_url")
     merged["release_year"] = merged.get("release_year") or fallback.release_year
-    merged["genre"] = merged.get("genre") or fallback.genre
+    merged["genre"] = _normalize_imported_genre(merged.get("genre") or fallback.genre)
     merged["duration_seconds"] = merged.get("duration_seconds") or fallback.duration_seconds
     album_type = _normalize_album_type(fallback.album_type or merged.get("album_type"))
     if not album_type:
@@ -1814,6 +2189,21 @@ class AlbumWriteupGenerator:
         stream_line = ""
         if album.album_stream_url:
             stream_line = f"\nStream URL: {album.album_stream_url}"
+        stream_host = urlparse(album.album_stream_url or "").netloc.lower()
+        has_spotify_stream = "spotify.com" in stream_host
+        listen_line_example = (
+            "YouTube Music | [Spotify](https://open.spotify.com/...)"
+            if has_spotify_stream
+            else "[YouTube Music](https://music.youtube.com/...) | Spotify"
+        )
+        listen_instruction = (
+            "For the '🎧 Listen' / '🎧 Слушать' line: if a Spotify stream URL is provided in the album data, "
+            "use it as [Spotify](url) and mention YouTube Music as plain text before it, exactly like "
+            "'YouTube Music | [Spotify](url)'. If a YouTube Music stream URL is provided in the album data, "
+            "use it as [YouTube Music](url) and mention Spotify as plain text after it, exactly like "
+            "'[YouTube Music](url) | Spotify'. Always mention both sources when a supported stream URL is known. "
+            "If no stream URL is known, omit the Listen line entirely.\n"
+        )
 
         context_parts = [
             f"Artist: {album.artist_name}",
@@ -1842,7 +2232,7 @@ class AlbumWriteupGenerator:
             "📌 Description:\n"
             "A few paragraphs about the album — history, sound, reception, notable facts.\n\n"
             "🎧 Listen:\n"
-            "[YouTube Music](https://music.youtube.com/...) | [Spotify](https://open.spotify.com/...)"
+            f"{listen_line_example}"
         )
         format_example_ru = (
             "Format example (Russian):\n"
@@ -1853,7 +2243,7 @@ class AlbumWriteupGenerator:
             "📌 Описание:\n"
             "Несколько абзацев об альбоме — история, звучание, reception, факты.\n\n"
             "🎧 Слушать:\n"
-            "[YouTube Music](https://music.youtube.com/...) | [Spotify](https://open.spotify.com/...)"
+            f"{listen_line_example}"
         )
         format_example = format_example_ru if language == "ru" else format_example_en
 
@@ -1863,10 +2253,7 @@ class AlbumWriteupGenerator:
             f"IMPORTANT: The genre value (after the 🎶 label) must always be written in English, "
             f"even when the write-up language is Russian.\n"
             f"Use the provided metadata and source excerpts. Search your knowledge for additional facts about the band and album.\n"
-            f"For the '🎧 Listen' / '🎧 Слушать' line: format each streaming link as a markdown link "
-            f"[Service Name](url). If a YouTube Music stream URL is provided in the album data, use it. "
-            f"You may also add a Spotify link if you know it. Separate multiple links with ' | '. "
-            f"If no stream URL is known, omit the Listen line entirely.\n"
+            f"{listen_instruction}"
             f"Keep the write-up informative but concise (3–6 sentences in the description paragraph).\n\n"
             f"{format_example}\n\n"
             f"Album data:\n{context}"

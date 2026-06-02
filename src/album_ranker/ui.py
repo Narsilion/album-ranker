@@ -408,6 +408,18 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         font-size: 13px;
         line-height: 1.5;
       }}
+      .artist-danger-zone {{
+        width: fit-content;
+        max-width: 100%;
+      }}
+      .artist-danger-zone p {{
+        white-space: nowrap;
+      }}
+      @media (max-width: 560px) {{
+        .artist-danger-zone p {{
+          white-space: normal;
+        }}
+      }}
       .aa-tab.active {{
         background: linear-gradient(135deg, rgba(255, 122, 61, 0.92), rgba(255, 154, 87, 0.86));
         color: #091019;
@@ -809,6 +821,68 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         margin-top: 14px;
         justify-items: start;
       }}
+      .album-action-panel {{
+        width: 100%;
+        display: grid;
+        gap: 12px;
+      }}
+      .album-action-group {{
+        width: 100%;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.035);
+      }}
+      .album-action-title {{
+        margin: 0 0 9px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }}
+      .album-action-buttons {{
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }}
+      .album-action-buttons button {{
+        width: 100%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 42px;
+      }}
+      .album-state-pill {{
+        margin: 0 0 10px;
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }}
+      .album-state-pill[data-listened="true"] {{
+        background: rgba(46, 168, 124, 0.14);
+        color: #9be5c8;
+      }}
+      .album-tool-button {{
+        justify-content: space-between;
+      }}
+      .album-tool-button .action-icon {{
+        font-size: 17px;
+        line-height: 1;
+      }}
+      .album-action-note {{
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }}
       .detail-head {{
         display: flex;
         align-items: center;
@@ -864,25 +938,46 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
       .tracklist {{
         display: grid;
         gap: 8px;
+        margin-left: -2px;
       }}
       .track-row {{
         display: grid;
-        grid-template-columns: 42px minmax(0, 1fr) 60px;
-        gap: 12px;
-        padding: 10px 12px;
+        grid-template-columns: 26px minmax(0, 1fr) 60px 28px;
+        gap: 6px;
+        padding: 10px 10px 10px 4px;
         border-radius: 14px;
         background: rgba(255, 255, 255, 0.03);
         font-size: 15px;
+        align-items: center;
       }}
       .track-row .muted {{
         text-align: right;
       }}
       .track-num {{
         display: flex;
-        justify-content: flex-end;
+        justify-content: flex-start;
         align-items: center;
         font-size: 14px;
         color: var(--muted);
+      }}
+      .track-like-btn {{
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        opacity: 0;
+        transition: opacity 0.15s;
+      }}
+      .track-row:hover .track-like-btn {{
+        opacity: 1;
+      }}
+      .track-like-btn.liked {{
+        opacity: 1;
+        color: #e0335a;
       }}
       .list-block {{
         border-radius: 22px;
@@ -1082,9 +1177,9 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           padding: 5px 7px;
         }}
         .track-row {{
-          grid-template-columns: 34px minmax(0, 1fr) auto;
-          gap: 8px;
-          padding: 9px 10px;
+          grid-template-columns: 26px minmax(0, 1fr) auto;
+          gap: 6px;
+          padding: 9px 10px 9px 4px;
           font-size: 14px;
         }}
         .rank-item {{
@@ -1110,7 +1205,6 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         <nav class="nav">{nav_markup}</nav>
         <div class="sidebar-foot">
           Write-up model: <strong>{_escape(str(page_state["settings"]["writeup_model"]))}</strong><br>
-          Host: {_escape(str(page_state["settings"]["host"]))}:{_escape(str(page_state["settings"]["port"]))}
           <div class="sidebar-status">
             Write-up generation: <strong>{_escape(str(page_state["settings"]["ai_status"]).replace("_", " "))}</strong>
             {f"<br>{_escape(str(page_state['settings'].get('ai_status_detail') or ''))}" if page_state["settings"].get("ai_status_detail") else ""}
@@ -1301,20 +1395,21 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           throw new Error(`${{label}} must be a full URL, for example https://example.com/page.`);
         }}
       }}
-      function validateMetalArchivesAlbumUrl(value) {{
+      function validateAlbumSourceUrl(value) {{
         const raw = String(value || "").trim();
-        if (!raw) throw new Error("Please provide a proper Metal Archives album URL from /albums/..., not an artist page URL.");
+        if (!raw) throw new Error("Please provide an album page URL from Metal Archives, Alterportal, or another supported source.");
         let parsed;
         try {{
           parsed = new URL(raw);
         }} catch (err) {{
-          throw new Error("Please provide a proper Metal Archives album URL from /albums/..., not an artist page URL. Use the full URL, for example https://www.metal-archives.com/albums/...");
+          throw new Error("Please provide a full album page URL, for example https://alterportal.net/2026_albums/... or https://www.metal-archives.com/albums/...");
         }}
         if (parsed.hostname.includes("metal-archives.com") && !parsed.pathname.startsWith("/albums/")) {{
           throw new Error("Please provide a proper Metal Archives album URL from /albums/..., not an artist page URL. This looks like an artist page.");
         }}
         return raw;
       }}
+      const validateMetalArchivesAlbumUrl = validateAlbumSourceUrl;
       async function fetchJson(url, options = {{}}) {{
         const response = await fetch(url, {{
           headers: {{
@@ -1358,6 +1453,7 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         const listened = Boolean(payload.listened_at);
         document.querySelectorAll(`.album-bookmark-toggle[data-album-id="${{albumId}}"]`).forEach((button) => {{
           button.dataset.bookmarked = bookmarked ? "true" : "false";
+          button.setAttribute('aria-pressed', bookmarked ? 'true' : 'false');
           if (button.classList.contains('cover-bookmark-btn')) {{
             button.innerHTML = bookmarked
               ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="17" fill="currentColor" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>'
@@ -1370,6 +1466,7 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         }});
         document.querySelectorAll(`.album-listened-toggle[data-album-id="${{albumId}}"]`).forEach((button) => {{
           button.dataset.listened = listened ? "true" : "false";
+          button.setAttribute('aria-pressed', listened ? 'true' : 'false');
           if (button.classList.contains('cover-listened-btn')) {{
             button.innerHTML = listened
               ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm4.6 7.7-5.3 5.3a1 1 0 0 1-1.4 0l-2.5-2.5 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4z"/></svg>'
@@ -1381,7 +1478,8 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           }}
         }});
         document.querySelectorAll(`.album-listened-state[data-album-id="${{albumId}}"]`).forEach((node) => {{
-          node.textContent = listened ? "Listened" : "Not Listened";
+          node.textContent = listened ? "Listened" : "Not listened yet";
+          node.dataset.listened = listened ? "true" : "false";
         }});
         const noteArea = document.getElementById("bookmarkNoteArea");
         if (noteArea) {{
@@ -1442,6 +1540,28 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           }} catch (error) {{
             button.dataset.listened = prevListened ? "true" : "false";
             showToast(error.message || "Listened update failed.");
+          }} finally {{
+            button.disabled = false;
+          }}
+        }});
+      }});
+      document.querySelectorAll(".track-like-btn").forEach((button) => {{
+        button.addEventListener("click", async (event) => {{
+          event.preventDefault();
+          event.stopPropagation();
+          const trackId = button.dataset.trackId;
+          button.disabled = true;
+          try {{
+            const payload = await fetchJson(`/api/tracks/${{trackId}}/like`, {{ method: "PATCH" }});
+            const liked = Boolean(payload.liked_at);
+            button.classList.toggle("liked", liked);
+            button.title = liked ? "Unlike" : "Like";
+            button.setAttribute("aria-label", liked ? "Unlike this track" : "Like this track");
+            button.innerHTML = liked
+              ? {_json(_TRACK_HEART_FILLED)}
+              : {_json(_TRACK_HEART_EMPTY)};
+          }} catch (error) {{
+            showToast(error.message || "Could not update track like.");
           }} finally {{
             button.disabled = false;
           }}
@@ -1591,7 +1711,7 @@ def _album_bookmark_button(album: AlbumCardRecord) -> str:
     bookmarked = bool(album.bookmarked_at)
     return (
         f'<button type="button" class="secondary album-bookmark-toggle" data-album-id="{album.id}" '
-        f'data-bookmarked="{str(bookmarked).lower()}">'
+        f'data-bookmarked="{str(bookmarked).lower()}" aria-pressed="{str(bookmarked).lower()}">'
         f'{"Remove from Later" if bookmarked else "Save for Later"}</button>'
     )
 
@@ -1613,6 +1733,15 @@ _LISTENED_SVG_EMPTY = (
     '<circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/></svg>'
 )
 
+_TRACK_HEART_FILLED = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">'
+    '<path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>'
+)
+_TRACK_HEART_EMPTY = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">'
+    '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
+)
+
 
 def _album_cover_bookmark_btn(album: AlbumCardRecord) -> str:
     bookmarked = bool(album.bookmarked_at)
@@ -1621,7 +1750,7 @@ def _album_cover_bookmark_btn(album: AlbumCardRecord) -> str:
     return (
         f'<button type="button" class="album-bookmark-toggle cover-bookmark-btn" '
         f'data-album-id="{album.id}" data-bookmarked="{str(bookmarked).lower()}" '
-        f'title="{label}" aria-label="{label}" '
+        f'title="{label}" aria-label="{label}" aria-pressed="{str(bookmarked).lower()}" '
         f'onclick="event.preventDefault(); event.stopPropagation();">{icon}</button>'
     )
 
@@ -1633,7 +1762,7 @@ def _album_cover_listened_btn(album: AlbumCardRecord) -> str:
     return (
         f'<button type="button" class="album-listened-toggle cover-listened-btn" '
         f'data-album-id="{album.id}" data-listened="{str(listened).lower()}" '
-        f'title="{label}" aria-label="{label}" '
+        f'title="{label}" aria-label="{label}" aria-pressed="{str(listened).lower()}" '
         f'onclick="event.preventDefault(); event.stopPropagation();">{icon}</button>'
     )
 
@@ -1642,13 +1771,13 @@ def _album_listened_button(album: AlbumCardRecord) -> str:
     listened = bool(album.listened_at)
     return (
         f'<button type="button" class="secondary album-listened-toggle" data-album-id="{album.id}" '
-        f'data-listened="{str(listened).lower()}">'
+        f'data-listened="{str(listened).lower()}" aria-pressed="{str(listened).lower()}">'
         f'{"Mark Unlistened" if listened else "Mark Listened"}</button>'
     )
 
 
 def _album_detail_listen_action(album: AlbumCardRecord) -> str:
-    return _album_bookmark_button(album) + _album_listened_button(album)
+    return _album_listened_button(album) + _album_bookmark_button(album)
 
 
 def _list_markup(record: AlbumListRecord, all_albums: "list[AlbumCardRecord] | None" = None) -> str:
@@ -1724,7 +1853,13 @@ def render_artists_page(
     genres: list[GenreRecord],
     imports: list[ImportDraftRecord],
 ) -> str:
-    recent_artists = sorted(artists, key=lambda artist: (artist.created_at, artist.id), reverse=True)
+    def artist_activity_key(artist: ArtistWithAlbumsRecord) -> tuple[str, int]:
+        timestamps = [artist.created_at, artist.updated_at]
+        for album in artist.albums:
+            timestamps.extend([album.created_at, album.updated_at])
+        return max(timestamps), artist.id
+
+    recent_artists = sorted(artists, key=artist_activity_key, reverse=True)
     artists_markup = "".join(
         _artist_markup(
             artist,
@@ -1843,7 +1978,7 @@ def render_artists_page(
           <button type="button" class="letter-btn" data-letter="#">#</button>
         </div>
         <div class="filter-meta">
-          {('<p id="artistFilterHint" class="muted">Showing the 20 most recently added artists. Use filters to search the full library.</p>' if len(artists) > 20 else '<span></span>')}
+          {('<p id="artistFilterHint" class="muted">Showing the 20 most recently active artists. Use filters to search the full library.</p>' if len(artists) > 20 else '<span></span>')}
           <div id="artistFilterCount" class="filter-count"></div>
         </div>
         <p id="artistFilterEmpty" class="empty-filter-state hidden">No artists match the current filters.</p>
@@ -2142,7 +2277,6 @@ def render_artist_detail_page(
         <div class="eyebrow">Artist</div>
         <h1>{_escape(artist.name)}</h1>
         {f'<div class="artist-hero-meta">{origin_meta}</div>' if origin_meta else ''}
-        <p>Open the artist library view, import albums in artist context, and keep the catalog grouped under the right record.</p>
       </section>
       <section class="panel" style="margin-top:20px;">
         <div class="detail-head">
@@ -2157,7 +2291,10 @@ def render_artist_detail_page(
         <div class="meta-stack" style="margin-top:14px; width:100%;">
           <button type="button" id="artistEditToggle" class="secondary" style="margin-bottom:8px;" aria-controls="artistEditPanel" aria-expanded="false">Edit Artist Metadata</button>
           <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px; width:100%; max-width:none; justify-self:stretch;">
-            <input id="artistRefreshUrlInput" class="compact-url-input" placeholder="Source URL (optional)" value="{_escape(artist.external_url)}" style="flex:1 1 auto; min-width:0; max-width:none;">
+            <div class="input-clear-wrap" style="flex:1 1 auto; min-width:0; max-width:none;">
+              <input id="artistRefreshUrlInput" class="compact-url-input" placeholder="Source URL (optional)" value="{_escape(artist.external_url)}" style="width:100%; min-width:0; max-width:none;">
+              <button type="button" class="input-clear-btn" aria-label="Clear">&#x2715;</button>
+            </div>
             <button type="button" id="artistRefreshBtn" class="secondary" style="white-space:nowrap; flex:0 0 auto;" title="Re-fetch metadata from source URL">&#8635; Refresh</button>
             <button type="button" id="artistRefreshCancelBtn" class="secondary hidden" style="white-space:nowrap; flex:0 0 auto;">Cancel</button>
           </div>
@@ -2166,7 +2303,7 @@ def render_artist_detail_page(
           </div>
           <div class="status compact" id="artistRefreshStatus" style="justify-self:stretch;"></div>
         </div>
-        <div class="danger-zone">
+        <div class="danger-zone artist-danger-zone">
           <div class="panel-title">Danger Zone</div>
           <p>Delete this artist and all albums attached to it.</p>
           <button type="button" id="artistDeleteButton" class="danger">Delete Artist</button>
@@ -2251,7 +2388,7 @@ def render_artist_detail_page(
               <button type="button" class="input-clear-btn" aria-label="Clear">&#x2715;</button>
             </div>
             <div class="form-note muted">
-              Use a Metal Archives album page URL from /albums/..., not the artist page URL.
+              Use an album page URL from Alterportal, Metal Archives, Bandcamp, YouTube Music, or Wikipedia.
             </div>
           </div>
           <div class="row">
@@ -2761,11 +2898,11 @@ def render_imports_page(settings: SettingsRecord) -> str:
           <div class="form-field">
             <label class="form-label" for="albumWithArtistSourceUrl">Source URL</label>
             <div class="input-clear-wrap">
-              <input id="albumWithArtistSourceUrl" name="source_url" placeholder="https://www.metal-archives.com/albums/..." required>
+              <input id="albumWithArtistSourceUrl" name="source_url" placeholder="https://alterportal.net/2026_albums/..." required>
               <button type="button" class="input-clear-btn" aria-label="Clear">&#x2715;</button>
             </div>
             <div class="form-note muted">
-              Use the album page URL, for example https://www.metal-archives.com/albums/For_My_Pain.../Buried_Blue/1391127
+              Use the album page URL, for example https://alterportal.net/2026_albums/189159-the-haunted-youth-boys-cry-too-2026.html
             </div>
           </div>
           <div class="form-field">
@@ -3114,11 +3251,12 @@ def render_albums_page(
       <section class="hero compact">
         <div class="eyebrow">Albums</div>
         <h1>See the library as a wall of records</h1>
-        <p>Filter by genre, year, or artist, open any cover into the full album detail view, and add manual entries from here. Album import now lives on the Artists page so the import stays tied to the artist you picked.</p>
+        <p>Search or filter by genre, year, or artist, open any cover into the full album detail view, and add manual entries from here. Album import now lives on the Artists page so the import stays tied to the artist you picked.</p>
       </section>
       <section class="panel" style="margin-top:20px;">
         <div class="panel-title">Filters</div>
         <div class="filters">
+          <input id="albumSearch" class="wide-search" type="search" placeholder="Search albums…" autocomplete="off">
           <select id="genreFilter"><option value="">Genre</option>{genre_options}</select>
           <select id="yearFilter"><option value="">Year</option>{year_options}</select>
           <input id="artistFilter" class="wide-search" type="search" list="artistDatalist" placeholder="Artist…" autocomplete="off">
@@ -3140,17 +3278,26 @@ def render_albums_page(
           const cards = Array.from(document.querySelectorAll("#albumGrid .album-card"));
           const genreEl   = document.getElementById("genreFilter");
           const yearEl    = document.getElementById("yearFilter");
+          const searchEl  = document.getElementById("albumSearch");
           const artistEl  = document.getElementById("artistFilter");
           const clearEl   = document.getElementById("albumFilterClear");
           function applyFilters() {{
             const genre  = genreEl.value;
             const year   = yearEl.value;
+            const query  = searchEl.value.trim().toLowerCase();
             const artist = artistEl.value.trim().toLowerCase();
-            const hasFilter = Boolean(genre || year || artist);
+            const hasFilter = Boolean(query || genre || year || artist);
             let visibleCount = 0;
             cards.forEach(card => {{
               const recentIndex = Number(card.dataset.recentIndex || 0);
+              const searchText = [
+                card.dataset.title || "",
+                card.dataset.artist || "",
+                card.dataset.genre || "",
+                card.dataset.year || "",
+              ].join(" ").toLowerCase();
               const isHidden =
+                (query  && !searchText.includes(query)) ||
                 (genre  && !card.dataset.genre.toLowerCase().includes(genre.toLowerCase())) ||
                 (year   && card.dataset.year !== year) ||
                 (artist && !card.dataset.artist.toLowerCase().includes(artist)) ||
@@ -3173,15 +3320,16 @@ def render_albums_page(
               empty.classList.toggle("hidden", visibleCount > 0);
             }}
           }}
-          [genreEl, yearEl, artistEl].forEach(el => {{
+          [searchEl, genreEl, yearEl, artistEl].forEach(el => {{
             el.addEventListener(el.tagName === "INPUT" ? "input" : "change", applyFilters);
           }});
           clearEl?.addEventListener("click", () => {{
+            searchEl.value = "";
             genreEl.value = "";
             yearEl.value = "";
             artistEl.value = "";
             applyFilters();
-            artistEl.focus();
+            searchEl.focus();
           }});
           applyFilters();
         }})();
@@ -3219,7 +3367,14 @@ def render_bookmarks_page(settings: SettingsRecord, albums: list[AlbumCardRecord
 
 def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord) -> str:
     track_rows = "".join(
-        f'<div class="track-row"><div class="track-num" style="display:flex;justify-content:flex-end;align-items:center;">{track.track_number}.</div><div>{_escape(track.title)}</div><div class="muted">{_escape(seconds_to_display(track.duration_seconds))}</div></div>'
+        f'<div class="track-row">'
+        f'<div class="track-num">{track.track_number}.</div>'
+        f'<div>{_escape(track.title)}</div>'
+        f'<div class="muted">{_escape(seconds_to_display(track.duration_seconds))}</div>'
+        f'<button type="button" class="track-like-btn{" liked" if track.liked_at else ""}" data-track-id="{track.id}" title="{"Unlike" if track.liked_at else "Like"}" aria-label="{"Unlike" if track.liked_at else "Like"} this track">'
+        f'{_TRACK_HEART_FILLED if track.liked_at else _TRACK_HEART_EMPTY}'
+        f'</button>'
+        f'</div>'
         for track in album.tracks
     ) or '<p class="muted">No tracklist yet.</p>'
     description_title = "Album Description"
@@ -3252,29 +3407,42 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             <div class="star-widget-label" id="starWidgetLabel">{_escape(star_initial_label)}</div>
             <div class="star-widget-status" id="starWidgetStatus"></div>
           </div>
-          {('<div class="row" style="margin-top:10px;gap:8px;justify-content:center;">' + (f'<a class="tag" href="{_escape(album.album_external_url)}" target="_blank" rel="noopener noreferrer">Source</a>' if album.album_external_url else '') + (f'<a class="tag" href="{_escape(album.album_stream_url)}" target="_blank" rel="noopener noreferrer">&#9654; Play</a>' if album.album_stream_url else '') + '</div>') if album.album_external_url or album.album_stream_url else ''}
+          {(f'<div style="margin-top:10px;text-align:center;"><a class="tag" href="{_escape(album.album_stream_url)}" target="_blank" rel="noopener noreferrer">&#9654; Play</a></div>') if album.album_stream_url else ''}
           <div class="meta-stack">
-            <div class="row" style="gap:8px; margin-bottom:8px;">
-              {_album_detail_listen_action(album)}
+            <div class="album-action-panel" aria-label="Album actions">
+              <section class="album-action-group" aria-labelledby="albumListeningActionsTitle">
+                <div class="album-action-title" id="albumListeningActionsTitle">Listening</div>
+                <div class="album-state-pill album-listened-state" data-album-id="{album.id}" data-listened="{str(bool(album.listened_at)).lower()}">{"Listened" if album.listened_at else "Not listened yet"}</div>
+                <div class="album-action-buttons">
+                  {_album_listened_button(album)}
+                  {_album_bookmark_button(album)}
+                </div>
+                <div id="bookmarkNoteArea" style="margin-top:10px;{'display:none;' if not album.bookmarked_at else ''}">
+                  <label class="form-label" for="bookmarkNoteInput" style="font-size:0.8rem;margin-bottom:4px;display:block;">Bookmark note</label>
+                  <textarea id="bookmarkNoteInput" data-album-id="{album.id}" rows="3" placeholder="Why did you save this album?" style="width:100%;box-sizing:border-box;resize:vertical;font-size:0.78rem;">{_escape(album.bookmark_note or '')}</textarea>
+                  <div class="status compact" id="bookmarkNoteStatus" style="min-height:1.2em;"></div>
+                </div>
+              </section>
+              <section class="album-action-group" aria-labelledby="albumManagementActionsTitle">
+                <div class="album-action-title" id="albumManagementActionsTitle">Album tools</div>
+                <div class="album-action-buttons">
+                  <button type="button" id="albumEditToggle" class="secondary album-tool-button" aria-controls="albumEditPanel" aria-expanded="false"><span>Edit Album Metadata</span><span class="action-icon" aria-hidden="true">&#9998;</span></button>
+                  <button type="button" id="albumRefreshBtn" class="secondary album-tool-button" title="Re-fetch metadata from source URL" aria-controls="albumRefreshSourcePanel" aria-expanded="false"><span>Refresh Metadata</span><span class="action-icon" aria-hidden="true">&#8635;</span></button>
+                </div>
+                <p class="album-action-note">Use refresh to review a new metadata draft before applying changes.</p>
+                <div id="albumRefreshSourcePanel" class="hidden" style="margin-top:10px;">
+                  <div class="input-clear-wrap" style="margin-bottom:6px;">
+                    <input id="albumRefreshUrlInput" class="compact-url-input" placeholder="https://..." value="{_escape(album.album_external_url)}">
+                    <button type="button" class="input-clear-btn" aria-label="Clear">&#x2715;</button>
+                  </div>
+                  <div style="display:flex; gap:6px; align-items:center;">
+                    <button type="button" id="albumRefreshGenerateBtn" style="white-space:nowrap; flex:1 1 auto;">Generate Draft</button>
+                    <button type="button" id="albumRefreshCancelBtn" class="secondary" style="white-space:nowrap; flex:0 0 auto;">Cancel</button>
+                  </div>
+                </div>
+              </section>
             </div>
-            <div class="status album-listened-state" data-album-id="{album.id}" style="text-align:center;">{"Listened" if album.listened_at else "Not Listened"}</div>
-            <div id="bookmarkNoteArea" style="margin-bottom:8px;{'display:none;' if not album.bookmarked_at else ''}">
-              <label class="form-label" for="bookmarkNoteInput" style="font-size:0.8rem;margin-bottom:4px;display:block;">Bookmark note</label>
-              <textarea id="bookmarkNoteInput" data-album-id="{album.id}" rows="3" placeholder="Why did you save this album?" style="width:100%;box-sizing:border-box;resize:vertical;font-size:0.78rem;">{_escape(album.bookmark_note or '')}</textarea>
-              <div class="status compact" id="bookmarkNoteStatus" style="min-height:1.2em;"></div>
-            </div>
-            <button type="button" id="albumEditToggle" class="secondary" style="margin-bottom:8px;" aria-controls="albumEditPanel" aria-expanded="false">Edit Album Metadata</button>
-            <div style="display:flex; gap:4px; align-items:center; margin-bottom:4px;">
-              <button type="button" id="albumRefreshBtn" class="secondary" title="Re-fetch metadata from source URL" aria-controls="albumRefreshSourcePanel" aria-expanded="false">&#8635; Refresh Metadata</button>
-            </div>
-            <div id="albumRefreshSourcePanel" class="hidden" style="margin-bottom:4px;">
-              <input id="albumRefreshUrlInput" class="compact-url-input" placeholder="https://..." value="{_escape(album.album_external_url)}" style="margin-bottom:4px;">
-              <div style="display:flex; gap:4px; align-items:center;">
-                <button type="button" id="albumRefreshGenerateBtn" style="white-space:nowrap; flex:1 1 auto;">Generate Draft</button>
-                <button type="button" id="albumRefreshCancelBtn" class="secondary" style="white-space:nowrap; flex:0 0 auto;">Cancel</button>
-              </div>
-            </div>
-            <div id="albumRefreshProgress" style="display:none; margin-bottom:4px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
+            <div id="albumRefreshProgress" style="display:none; margin-top:6px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
               <div id="albumRefreshBar" style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
             </div>
             <div class="status compact" id="albumRefreshStatus"></div>
@@ -3558,7 +3726,9 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
         const albumDeleteButton = document.getElementById("albumDeleteButton");
         function syncAlbumEditToggle() {{
           const isOpen = !albumEditPanel.classList.contains("hidden");
-          albumEditToggle.textContent = isOpen ? "Close Editor" : "Edit Album Metadata";
+          albumEditToggle.innerHTML = isOpen
+            ? '<span>Close Editor</span><span class="action-icon" aria-hidden="true">&times;</span>'
+            : '<span>Edit Album Metadata</span><span class="action-icon" aria-hidden="true">&#9998;</span>';
           albumEditToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
         }}
         albumEditToggle.addEventListener("click", () => {{
@@ -3585,6 +3755,14 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           const reviewPanel = document.getElementById('albumRefreshReview');
           const refreshForm = document.getElementById('albumRefreshForm');
           let abortCtrl = null;
+          document.querySelectorAll(".input-clear-wrap").forEach((wrap) => {{
+            const input = wrap.querySelector("input");
+            const clearBtn = wrap.querySelector(".input-clear-btn");
+            const sync = () => {{ clearBtn.style.display = input.value ? "block" : "none"; }};
+            input.addEventListener("input", sync);
+            clearBtn.addEventListener("click", () => {{ input.value = ""; input.dispatchEvent(new Event("input")); input.focus(); }});
+            sync();
+          }});
           function setSourcePanelOpen(isOpen) {{
             sourcePanel.classList.toggle('hidden', !isOpen);
             btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');

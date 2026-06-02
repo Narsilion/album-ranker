@@ -113,6 +113,7 @@ class Database:
                     title TEXT NOT NULL,
                     duration_seconds INTEGER,
                     position INTEGER NOT NULL DEFAULT 0,
+                    liked_at TEXT,
                     FOREIGN KEY(album_id) REFERENCES albums(id) ON DELETE CASCADE
                 );
 
@@ -194,6 +195,9 @@ class Database:
                 connection.execute("ALTER TABLE albums ADD COLUMN bookmark_note TEXT")
             if "listened_at" not in album_columns:
                 connection.execute("ALTER TABLE albums ADD COLUMN listened_at TEXT")
+            track_columns = {row["name"] for row in connection.execute("PRAGMA table_info(tracks)").fetchall()}
+            if "liked_at" not in track_columns:
+                connection.execute("ALTER TABLE tracks ADD COLUMN liked_at TEXT")
             connection.execute(
                 """
                 UPDATE albums
@@ -653,6 +657,19 @@ class Database:
                 (now if listened else None, now, album_id),
             )
         return self.get_album(album_id)
+
+    def toggle_track_like(self, track_id: int) -> TrackRecord:
+        with self.connection() as connection:
+            row = connection.execute("SELECT * FROM tracks WHERE id = ?", (track_id,)).fetchone()
+            if row is None:
+                raise KeyError(track_id)
+            new_liked_at = None if row["liked_at"] else utc_now_iso()
+            connection.execute(
+                "UPDATE tracks SET liked_at = ? WHERE id = ?",
+                (new_liked_at, track_id),
+            )
+            updated = connection.execute("SELECT * FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        return TrackRecord.model_validate(dict(updated))
 
     def update_album_overview(self, album_id: int, overview: str | None) -> AlbumDetailRecord:
         # Stored as "overview" for compatibility; product language is album write-up / Telegram post.
