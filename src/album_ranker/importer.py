@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
-from album_ranker.openai_client import AlbumWriteupAIClient, OpenAIClientError
+from album_ranker.openai_client import AIClientError, AlbumWriteupAIClient, GitHubModelsClient, OpenAIClientError, RoutingWriteupClient
 from album_ranker.schemas import AlbumDetailRecord, AlbumDraftData, ArtistDraftData, ImportRequest, display_to_seconds
 
 DEFAULT_HEADERS = {
@@ -538,6 +538,16 @@ def _extract_metal_archives_cover(html: str) -> str | None:
     return None
 
 
+def _extract_metal_archives_band_comment(html: str) -> str | None:
+    match = re.search(
+        r'(?is)<div[^>]+class=["\'][^"\']*\bband_comment\b[^"\']*["\'][^>]*>(.*?)</div>',
+        html,
+    )
+    if not match:
+        return None
+    return _strip_html(match.group(1)) or None
+
+
 def _normalize_metal_archives_url(href: str | None, source_url: str | None = None) -> str | None:
     if not href:
         return None
@@ -632,7 +642,7 @@ def _metal_archives_artist_draft(request: ImportRequest, html: str, metadata: di
     origin_parts = [part for part in [country, location] if part]
     origin = _normalize_imported_origin(", ".join(origin_parts) or None)
     genre = _normalize_imported_genre(details.get("Genre") or details.get("Genre(s)"))
-    description = metadata.get("description")
+    description = _extract_metal_archives_band_comment(html) or metadata.get("description")
     if not description:
         formed = details.get("Formed in")
         status = details.get("Status")
@@ -2138,7 +2148,7 @@ class SourceMetadataImporter:
 
 
 class AlbumWriteupGenerator:
-    def __init__(self, client: AlbumWriteupAIClient | None) -> None:
+    def __init__(self, client: AlbumWriteupAIClient | GitHubModelsClient | RoutingWriteupClient | None) -> None:
         self.client = client
         self.last_request_failed = False
         self.last_error: str | None = None
@@ -2157,7 +2167,7 @@ class AlbumWriteupGenerator:
 
     def generate_album_writeup(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:
         if self.client is None:
-            raise OpenAIClientError("OPENAI_API_KEY is not configured")
+            raise AIClientError("No AI client is configured")
 
         page_excerpt = ""
         if album.album_external_url:
@@ -2281,7 +2291,7 @@ class AlbumWriteupGenerator:
             )
             self._mark_success()
             return str(data["overview"])
-        except OpenAIClientError as exc:
+        except (OpenAIClientError, AIClientError) as exc:
             self._mark_failure(str(exc))
             raise
         except Exception as exc:
@@ -2292,7 +2302,7 @@ class AlbumWriteupGenerator:
 class MetadataImporter:
     def __init__(
         self,
-        client: AlbumWriteupAIClient | None,
+        client: AlbumWriteupAIClient | GitHubModelsClient | RoutingWriteupClient | None,
         *,
         source_importer: SourceMetadataImporter | None = None,
         writeup_generator: AlbumWriteupGenerator | None = None,
@@ -2301,7 +2311,7 @@ class MetadataImporter:
         self.writeup_generator = writeup_generator or AlbumWriteupGenerator(client)
 
     @property
-    def client(self) -> AlbumWriteupAIClient | None:
+    def client(self) -> AlbumWriteupAIClient | GitHubModelsClient | RoutingWriteupClient | None:
         return self.writeup_generator.client
 
     @property

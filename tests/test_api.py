@@ -842,6 +842,40 @@ def test_settings_update_accepts_active_model_for_compatibility(client) -> None:
     assert settings_response.json()["writeup_model"] == "gpt-5.4-mini"
 
 
+def test_settings_page_switches_to_github_provider(settings) -> None:
+    configured_settings = replace(
+        settings,
+        github_models_token="test-token",
+        github_models=["openai/gpt-4.1", "openai/gpt-4o"],
+    )
+    app = create_app(
+        configured_settings,
+        importer=MetadataImporter(client=None),
+        cover_downloader=CoverDownloader(configured_settings.cover_dir),
+    )
+    local_client = TestClient(app)
+
+    settings_response = local_client.put(
+        "/api/settings",
+        json={
+            "ai_provider": "github",
+            "writeup_model": "openai/gpt-4o",
+            "theme": "dark-green",
+        },
+    )
+    settings_page = local_client.get("/settings")
+
+    assert settings_response.status_code == 200
+    assert settings_response.json()["ai_provider"] == "github"
+    assert settings_response.json()["writeup_model"] == "openai/gpt-4o"
+    assert settings_response.json()["available_models"] == ["openai/gpt-4.1", "openai/gpt-4o"]
+    assert settings_response.json()["theme"] == "dark-green"
+    assert '<option value="github" selected>' in settings_page.text
+    assert '<option value="openai/gpt-4o" selected>' in settings_page.text
+    assert "pageState.settings.available_models_by_provider" not in settings_page.text
+    assert 'const modelsByProvider = {"openai":' in settings_page.text
+
+
 def test_patch_album_rating(client) -> None:
     album = client.post(
         "/api/albums",
@@ -1727,6 +1761,8 @@ def test_album_with_artist_import_does_not_copy_ytm_album_description_to_artist(
     monkeypatch.setattr(importer_module, "_fetch_url_document", lambda url: (html, "text/html"))
     monkeypatch.setattr(importer_module, "_fetch_ytm_full_page", lambda url: "")
     monkeypatch.setattr(importer_module, "_extract_yt_playlist_tracks", lambda playlist_id: [])
+    import album_ranker.app as app_module
+    monkeypatch.setattr(app_module, "wikipedia_artist_url_from_name", lambda name: None)
     app = create_app(settings, importer=MetadataImporter(client=None), cover_downloader=CoverDownloader(settings.cover_dir))
     local_client = TestClient(app)
 

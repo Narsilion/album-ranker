@@ -15,6 +15,10 @@ class Settings:
     port: int
     openai_api_key: str | None
     model: str
+    ai_provider: str = "openai"
+    github_models_token: str | None = None
+    github_models_token_source: str | None = None
+    github_models: list[str] | None = None
 
 
 def _parse_port(raw: str) -> int:
@@ -54,6 +58,11 @@ def load_settings() -> Settings:
     cover_dir = data_dir / "covers"
     port = _parse_port(os.environ.get("ALBUM_RANKER_PORT", "8780"))
     model = _parse_model(os.environ.get("ALBUM_RANKER_MODEL", "gpt-4o"))
+    github_models = [
+        m.strip()
+        for m in os.environ.get("ALBUM_RANKER_GITHUB_MODELS", "openai/gpt-4.1,openai/gpt-4o,openai/o4-mini").split(",")
+        if m.strip()
+    ]
     return Settings(
         project_root=project_root,
         db_path=db_path,
@@ -63,4 +72,12 @@ def load_settings() -> Settings:
         port=port,
         openai_api_key=os.environ.get("OPENAI_API_KEY"),
         model=model,
+        ai_provider=os.environ.get("ALBUM_RANKER_AI_PROVIDER", "openai").strip().lower() or "openai",
+        github_models_token=os.environ.get("GITHUB_MODELS_TOKEN") or os.environ.get("GITHUB_TOKEN"),
+        github_models_token_source=(
+            "GITHUB_MODELS_TOKEN"
+            if os.environ.get("GITHUB_MODELS_TOKEN")
+            else ("GITHUB_TOKEN" if os.environ.get("GITHUB_TOKEN") else None)
+        ),
+        github_models=github_models or ["openai/gpt-4.1"],
     )

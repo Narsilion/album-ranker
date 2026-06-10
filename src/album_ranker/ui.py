@@ -4475,17 +4475,25 @@ def render_settings_page(settings: SettingsRecord) -> str:
             </label>"""
         for t_val, t_label, t_desc in _themes
     )
+    provider_options = "".join(
+        f'<option value="{v}"{" selected" if v == settings.ai_provider else ""}>{label}</option>'
+        for v, label in [("openai", "OpenAI API"), ("github", "GitHub Models (Copilot)")]
+    )
+    models_by_provider_json = _json(settings.available_models_by_provider)
     body = f"""
       <section class="hero compact">
         <div class="eyebrow">Settings</div>
         <h1>Keep write-up generation optional and visible</h1>
-        <p>Choose the OpenAI model used only for album write-ups and Telegram post drafts, and pick a colour theme for the interface.</p>
+        <p>Choose the AI provider and model used only for album write-ups and Telegram post drafts, and pick a colour theme for the interface.</p>
       </section>
       <section class="grid two">
         <section class="panel">
           <div class="panel-title">Write-up Model</div>
           <form id="settingsForm">
-            <select name="writeup_model">{options}</select>
+            <label style="display:block;margin-bottom:4px;font-size:0.85em;color:var(--muted);">AI Provider</label>
+            <select name="ai_provider" id="providerSelect">{provider_options}</select>
+            <label style="display:block;margin-top:12px;margin-bottom:4px;font-size:0.85em;color:var(--muted);">Model</label>
+            <select name="writeup_model" id="writeupModelSelect">{options}</select>
             <div class="panel-title" style="margin-top:20px;">Theme</div>
             <div class="theme-picker">{theme_options}</div>
             <div class="row" style="margin-top:16px;">
@@ -4496,7 +4504,9 @@ def render_settings_page(settings: SettingsRecord) -> str:
         </section>
         <section class="panel">
           <div class="panel-title">Runtime</div>
-          <p class="muted">OpenAI key for write-up generation: <strong>{'configured' if settings.openai_api_key_configured else 'missing'}</strong></p>
+          <p class="muted">AI provider: <strong>{_escape(settings.ai_provider.replace("github", "GitHub Models").replace("openai", "OpenAI API"))}</strong></p>
+          <p class="muted">OpenAI key: <strong>{'configured' if settings.openai_api_key_configured else 'missing'}</strong></p>
+          <p class="muted">GitHub Models token: <strong>{'configured' if settings.github_token_configured else 'missing'}</strong></p>
           <p class="muted">Write-up generation status: <strong>{_escape(settings.ai_status.replace("_", " "))}</strong></p>
           {f'<p class="muted">{_escape(settings.ai_status_detail)}</p>' if settings.ai_status_detail else ''}
           <p class="muted">Server: {_escape(settings.host)}:{settings.port}</p>
@@ -4550,17 +4560,29 @@ def render_settings_page(settings: SettingsRecord) -> str:
             document.documentElement.setAttribute("data-theme", el.dataset.themeValue);
           }});
         }});
+        const modelsByProvider = {models_by_provider_json};
+        const providerSelect = document.getElementById("providerSelect");
+        const writeupModelSelect = document.getElementById("writeupModelSelect");
+        providerSelect.addEventListener("change", (e) => {{
+          const provider = e.target.value;
+          const models = modelsByProvider[provider] || [];
+          writeupModelSelect.innerHTML = models.map((m) => `<option value="${{m}}">${{m}}</option>`).join("") || '<option value="">No models available</option>';
+        }});
         document.getElementById("settingsForm").addEventListener("submit", async (event) => {{
           event.preventDefault();
           const form = event.currentTarget;
           const status = document.getElementById("settingsStatus");
           try {{
             status.textContent = "Saving...";
-            validateRequired(form.writeup_model.value, "Write-up model");
+            validateRequired(writeupModelSelect.value, "Write-up model");
             const selectedTheme = form.querySelector("input[name=theme]:checked")?.value || "dark";
             await fetchJson("/api/settings", {{
               method: "PUT",
-              body: JSON.stringify({{ writeup_model: form.writeup_model.value, theme: selectedTheme }}),
+              body: JSON.stringify({{
+                writeup_model: writeupModelSelect.value,
+                theme: selectedTheme,
+                ai_provider: providerSelect.value,
+              }}),
             }});
             status.textContent = "Settings saved.";
             setTimeout(() => window.location.reload(), 600);

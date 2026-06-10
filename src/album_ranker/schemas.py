@@ -288,6 +288,7 @@ class SettingsRecord(BaseModel):
     active_model: str
     writeup_model: str
     available_models: list[str] = Field(default_factory=list)
+    available_models_by_provider: dict[str, list[str]] = Field(default_factory=dict)
     openai_api_key_configured: bool = False
     ai_status: str = "key_missing"
     ai_status_detail: str | None = None
@@ -295,12 +296,15 @@ class SettingsRecord(BaseModel):
     host: str
     port: int
     theme: str = "dark"
+    ai_provider: str = "openai"
+    github_token_configured: bool = False
 
 
 class SettingsUpdateRequest(BaseModel):
     writeup_model: str | None = None
     active_model: str | None = None
     theme: str = "dark"
+    ai_provider: str | None = None
 
     @property
     def selected_model(self) -> str:

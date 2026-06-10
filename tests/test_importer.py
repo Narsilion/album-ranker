@@ -553,6 +553,40 @@ def test_best_effort_artist_draft_parses_metal_archives_band_page(monkeypatch) -
     assert draft.genre == "Gothic Metal / Rock"
 
 
+def test_best_effort_artist_draft_uses_metal_archives_band_comment_as_description(monkeypatch) -> None:
+    html = """
+    <html>
+      <head>
+        <title>Beleriand - Encyclopaedia Metallum: The Metal Archives</title>
+      </head>
+      <body>
+        <h1 class="band_name"><a href="/bands/Beleriand/3540468433">Beleriand</a></h1>
+        <dl>
+          <dt>Country of origin:</dt><dd>Norway</dd>
+          <dt>Location:</dt><dd>Tromsø, Troms</dd>
+          <dt>Genre:</dt><dd>Epic/Atmospheric Black Metal</dd>
+        </dl>
+        <div class="band_comment clear">
+          Beleriand is named after the north-western region of the Middle-Earth,
+          according to the J.R.R. Tolkien's "The Silmarillion"
+        </div>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(
+            source_url="https://www.metal-archives.com/bands/Beleriand/3540468433",
+        )
+    )
+
+    assert draft.description == (
+        "Beleriand is named after the north-western region of the Middle-Earth, "
+        'according to the J.R.R. Tolkien\'s "The Silmarillion"'
+    )
+
+
 def test_metal_archives_artist_draft_normalizes_england_origin_to_uk(monkeypatch) -> None:
     html = """
     <html>

@@ -251,18 +251,22 @@ class Database:
         *,
         default_model: str,
         available_models: list[str],
+        available_models_by_provider: dict[str, list[str]] | None = None,
         host: str,
         port: int,
         openai_api_key_configured: bool,
         ai_status: str,
         ai_status_detail: str | None,
         last_import_diagnostics: dict[str, object] | None,
+        ai_provider: str = "openai",
+        github_token_configured: bool = False,
     ) -> SettingsRecord:
         return SettingsRecord(
             model=default_model,
             active_model=self.get_active_model(default_model),
             writeup_model=self.get_active_model(default_model),
             available_models=available_models,
+            available_models_by_provider=available_models_by_provider or {},
             openai_api_key_configured=openai_api_key_configured,
             ai_status=ai_status,
             ai_status_detail=ai_status_detail,
@@ -270,7 +274,12 @@ class Database:
             host=host,
             port=port,
             theme=self.get_app_setting("theme", "dark") or "dark",
+            ai_provider=ai_provider,
+            github_token_configured=github_token_configured,
         )
+
+    def get_active_ai_provider(self, default: str = "openai") -> str:
+        return self.get_app_setting("active_ai_provider") or default
 
     def update_settings(self, payload: SettingsUpdateRequest) -> None:
         selected_model = payload.selected_model.strip()
@@ -281,6 +290,11 @@ class Database:
             raise ValueError("Invalid theme value.")
         self.set_app_setting("active_model", selected_model)
         self.set_app_setting("theme", payload.theme)
+        if payload.ai_provider is not None:
+            allowed_providers = {"openai", "github"}
+            if payload.ai_provider not in allowed_providers:
+                raise ValueError("Invalid AI provider value.")
+            self.set_app_setting("active_ai_provider", payload.ai_provider)
 
     def list_genres(self) -> list[GenreRecord]:
         with self.connection() as connection:

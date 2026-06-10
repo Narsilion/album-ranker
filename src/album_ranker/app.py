@@ -21,7 +21,7 @@ from album_ranker.importer import (
     metal_archives_artist_url_from_album_url,
     wikipedia_artist_url_from_name,
 )
-from album_ranker.openai_client import AlbumWriteupAIClient
+from album_ranker.openai_client import AlbumWriteupAIClient, GitHubModelsClient, RoutingWriteupClient
 from album_ranker.schemas import (
     AlbumBookmarkPatch,
     AlbumBookmarkNotePatch,
@@ -221,10 +221,29 @@ def create_app(
     ]
     if settings.model not in available_models:
         available_models.insert(0, settings.model)
+    github_models = list(dict.fromkeys(settings.github_models or ["openai/gpt-4.1"]))
+    available_models_by_provider = {
+        "openai": available_models,
+        "github": github_models,
+    }
     db = Database(settings.db_path)
     db.initialize()
     db.set_app_setting("active_model", db.get_active_model(settings.model))
-    importer = importer or MetadataImporter(AlbumWriteupAIClient(settings.openai_api_key) if settings.openai_api_key else None)
+    if db.get_app_setting("active_ai_provider") is None:
+        db.set_app_setting("active_ai_provider", settings.ai_provider)
+    openai_ai_client = AlbumWriteupAIClient(settings.openai_api_key)
+    github_ai_client = GitHubModelsClient(settings.github_models_token)
+
+    def active_ai_provider() -> str:
+        stored = db.get_active_ai_provider(settings.ai_provider)
+        return stored if stored in available_models_by_provider else settings.ai_provider
+
+    routing_client = RoutingWriteupClient(
+        active_provider=active_ai_provider,
+        openai_client=openai_ai_client,
+        github_client=github_ai_client,
+    )
+    importer = importer or MetadataImporter(routing_client)
     cover_downloader = cover_downloader or CoverDownloader(settings.cover_dir)
 
     app = FastAPI(title="Album Ranker")
@@ -253,23 +272,33 @@ def create_app(
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
     def writeup_generation_status() -> tuple[str, str | None]:
-        if not settings.openai_api_key:
-            return "key_missing", "OPENAI_API_KEY is not configured."
+        provider = active_ai_provider()
+        if provider == "github":
+            if not settings.github_models_token:
+                return "key_missing", "GITHUB_MODELS_TOKEN is not configured."
+        else:
+            if not settings.openai_api_key:
+                return "key_missing", "OPENAI_API_KEY is not configured."
         if importer.last_request_failed:
             return "last_request_failed", importer.last_error
         return "ready", None
 
     def build_settings() -> SettingsRecord:
+        provider = active_ai_provider()
+        models = available_models_by_provider.get(provider, available_models)
         writeup_status, writeup_status_detail = writeup_generation_status()
         return db.build_settings_record(
             default_model=settings.model,
-            available_models=available_models,
+            available_models=models,
+            available_models_by_provider=dict(available_models_by_provider),
             host=settings.host,
             port=settings.port,
             openai_api_key_configured=bool(settings.openai_api_key),
             ai_status=writeup_status,
             ai_status_detail=writeup_status_detail,
             last_import_diagnostics=importer.last_diagnostics or None,
+            ai_provider=provider,
+            github_token_configured=bool(settings.github_models_token),
         )
 
     @app.get("/", response_class=HTMLResponse)
@@ -341,7 +370,9 @@ def create_app(
     @app.put("/api/settings", response_model=SettingsRecord)
     async def update_settings(payload: SettingsUpdateRequest) -> SettingsRecord:
         selected_model = payload.selected_model
-        if selected_model not in available_models:
+        target_provider = payload.ai_provider or active_ai_provider()
+        all_allowed = available_models_by_provider.get(target_provider, available_models)
+        if selected_model not in all_allowed:
             raise HTTPException(status_code=400, detail="That model is not in the available model list. Pick one from the menu.")
         try:
             db.update_settings(payload)
