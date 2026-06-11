@@ -187,6 +187,10 @@ class Database:
                 connection.execute("ALTER TABLE album_lists ADD COLUMN is_auto INTEGER NOT NULL DEFAULT 0")
             if "auto_limit" not in list_columns:
                 connection.execute("ALTER TABLE album_lists ADD COLUMN auto_limit INTEGER")
+            if "auto_full_length_only" not in list_columns:
+                connection.execute(
+                    "ALTER TABLE album_lists ADD COLUMN auto_full_length_only INTEGER NOT NULL DEFAULT 0"
+                )
             if "overview" not in album_columns:
                 connection.execute("ALTER TABLE albums ADD COLUMN overview TEXT")
             if "bookmarked_at" not in album_columns:
@@ -818,16 +822,25 @@ class Database:
         return self.get_list(list_id)
 
     def update_list(self, list_id: int, payload: AlbumListUpsert) -> AlbumListRecord:
-        self.get_list(list_id)
+        existing = self.get_list(list_id)
         genres_json = json.dumps(payload.genres)
         with self.connection() as connection:
             connection.execute(
                 """
                 UPDATE album_lists
-                SET name = ?, description = ?, year = ?, genre_filter_hint = ?, updated_at = ?
+                SET name = ?, description = ?, year = ?, genre_filter_hint = ?,
+                    auto_full_length_only = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (payload.name, payload.description, payload.year, genres_json, utc_now_iso(), list_id),
+                (
+                    payload.name,
+                    payload.description,
+                    payload.year,
+                    genres_json,
+                    int(payload.auto_full_length_only) if existing.is_auto else 0,
+                    utc_now_iso(),
+                    list_id,
+                ),
             )
         return self.get_list(list_id)
 
@@ -925,6 +938,8 @@ class Database:
             filters.append(f"({genre_conditions})")
             for normalized in normalized_genres:
                 params.extend([normalized, f"%{normalized}%"])
+        if payload.full_length_only:
+            filters.append("LOWER(TRIM(album_type)) IN ('full-length', 'full length')")
         where = " AND ".join(filters)
         params.append(payload.limit)
         with self.connection() as connection:
@@ -950,6 +965,8 @@ class Database:
                     filter_parts.append(f"from {payload.year}")
                 if payload.genres:
                     filter_parts.append(f"matching '{', '.join(payload.genres)}'")
+                if payload.full_length_only:
+                    filter_parts.append("that are full-length")
                 suffix = f" {' and '.join(filter_parts)}" if filter_parts else ""
                 raise ValueError(f"No rated albums{suffix}. Rate matching albums first, then generate the list.")
             existing = connection.execute(
@@ -959,8 +976,19 @@ class Database:
             if existing and payload.update_existing:
                 list_id = existing["id"]
                 connection.execute(
-                    "UPDATE album_lists SET year = ?, genre_filter_hint = ?, auto_limit = ?, updated_at = ? WHERE id = ?",
-                    (payload.year, genres_json, payload.limit, utc_now_iso(), list_id),
+                    """
+                    UPDATE album_lists
+                    SET year = ?, genre_filter_hint = ?, auto_limit = ?, auto_full_length_only = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        payload.year,
+                        genres_json,
+                        payload.limit,
+                        int(payload.full_length_only),
+                        utc_now_iso(),
+                        list_id,
+                    ),
                 )
                 connection.execute("DELETE FROM list_items WHERE list_id = ?", (list_id,))
             elif existing and not payload.update_existing:
@@ -968,8 +996,22 @@ class Database:
             else:
                 now = utc_now_iso()
                 cursor = connection.execute(
-                    "INSERT INTO album_lists(name, year, genre_filter_hint, auto_limit, is_auto, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
-                    (payload.name, payload.year, genres_json, payload.limit, now, now),
+                    """
+                    INSERT INTO album_lists(
+                        name, year, genre_filter_hint, auto_limit, auto_full_length_only,
+                        is_auto, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        payload.name,
+                        payload.year,
+                        genres_json,
+                        payload.limit,
+                        int(payload.full_length_only),
+                        now,
+                        now,
+                    ),
                 )
                 list_id = int(cursor.lastrowid)
             for rank, album_id in enumerate(album_ids, start=1):

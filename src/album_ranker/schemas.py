@@ -205,6 +205,7 @@ class AlbumListUpsert(BaseModel):
     genres: list[str] = Field(default_factory=list)
     is_auto: bool = False
     auto_limit: int | None = None
+    auto_full_length_only: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -255,6 +256,7 @@ class AutoListBestRatedRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=500)
     year: int | None = Field(default=None, ge=1000, le=9999)
     genres: list[str] = Field(default_factory=list)
+    full_length_only: bool = True
     update_existing: bool = False
 
     @model_validator(mode="before")

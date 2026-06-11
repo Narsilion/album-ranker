@@ -200,6 +200,7 @@ def test_album_genre_normalized_column_tracks_create_update_and_auto_lists(setti
         AlbumUpsert(
             artist_name="Katatonia",
             title="Brave Murder Day",
+            album_type="Full-length",
             release_year=1996,
             genre="  Death   Doom Metal  ",
             rating=10,
@@ -210,6 +211,7 @@ def test_album_genre_normalized_column_tracks_create_update_and_auto_lists(setti
         AlbumUpsert(
             artist_name="Katatonia",
             title="Discouraged Ones",
+            album_type="Full-length",
             release_year=1998,
             genre="Depressive Rock",
             rating=8,
@@ -247,6 +249,53 @@ def test_album_genre_normalized_column_tracks_create_update_and_auto_lists(setti
             (album.id,),
         ).fetchone()
     assert updated_row["genre_normalized"] == "black metal"
+
+
+def test_best_rated_auto_list_can_include_only_full_length_albums(settings) -> None:
+    db = Database(settings.db_path)
+    db.initialize()
+
+    db.create_album(
+        AlbumUpsert(
+            artist_name="Band",
+            title="Full Album",
+            album_type="Full-length",
+            rating=9,
+            tracks=[],
+        )
+    )
+    db.create_album(
+        AlbumUpsert(
+            artist_name="Band",
+            title="Higher Rated EP",
+            album_type="EP",
+            rating=10,
+            tracks=[],
+        )
+    )
+
+    generated = db.auto_list_best_rated(
+        AutoListBestRatedRequest(
+            name="Best Full-Lengths",
+            limit=10,
+            full_length_only=True,
+        )
+    )
+
+    assert generated.auto_full_length_only is True
+    assert [item.album.title for item in generated.items] == ["Full Album"]
+
+    regenerated = db.auto_list_best_rated(
+        AutoListBestRatedRequest(
+            name="Best Full-Lengths",
+            limit=10,
+            full_length_only=False,
+            update_existing=True,
+        )
+    )
+
+    assert regenerated.auto_full_length_only is False
+    assert [item.album.title for item in regenerated.items] == ["Higher Rated EP", "Full Album"]
 
 
 def test_artist_create_update_delete_and_album_delete_cascade(settings) -> None:

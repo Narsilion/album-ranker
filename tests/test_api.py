@@ -170,14 +170,23 @@ def _check_js_syntax(html: str, page_label: str = "") -> None:
             )
 
 
-def _create_album(client, *, artist_name="Band", title="Album", description="A description.\nWith newlines & \"quotes\".") -> dict:
+def _create_album(
+    client,
+    *,
+    artist_name="Band",
+    title="Album",
+    description="A description.\nWith newlines & \"quotes\".",
+    release_year=2026,
+    album_type=None,
+) -> dict:
     return client.post(
         "/api/albums",
         json={
             "artist_name": artist_name,
             "artist_description": description,
             "title": title,
-            "release_year": 2026,
+            "release_year": release_year,
+            "album_type": album_type,
             "genre": "Black Metal",
             "duration_seconds": 1800,
             "cover_image_path": None,
@@ -186,6 +195,52 @@ def _create_album(client, *, artist_name="Band", title="Album", description="A d
             "tracks": [],
         },
     ).json()
+
+
+def test_album_detail_header_prioritizes_album_title_and_labels_release_year(client) -> None:
+    album = _create_album(client, artist_name="Vanir", title="Wyrd", release_year=2026)
+    page = client.get(f"/albums/{album['id']}")
+
+    assert page.status_code == 200
+    assert re.search(r'<div class="eyebrow">Album Details</div>\s*<h1>Wyrd</h1>', page.text)
+    assert f'<div class="album-hero-byline">by <a href="/artists/{album["artist_id"]}">Vanir</a></div>' in page.text
+    assert '<span class="album-release-pill">Released 2026</span>' in page.text
+    assert "Wyrd - 2026" not in page.text
+
+
+def test_album_detail_header_omits_release_badge_without_year(client) -> None:
+    album = _create_album(client, title="Dateless", release_year=None)
+    page = client.get(f"/albums/{album['id']}")
+
+    assert page.status_code == 200
+    assert "<h1>Dateless</h1>" in page.text
+    assert 'class="album-release-pill"' not in page.text
+
+
+def test_album_metadata_forms_use_fixed_album_type_dropdowns(client) -> None:
+    album = _create_album(client, artist_name="Vanir", title="Wyrd", album_type="Live")
+    artist_page = client.get(f"/artists/{album['artist_id']}")
+    album_page = client.get(f"/albums/{album['id']}")
+    imports_page = client.get("/imports")
+
+    expected_options = [
+        ("", "Not set"),
+        ("Full-length", "Full-length"),
+        ("EP", "EP"),
+        ("Single", "Single"),
+        ("Live", "Live"),
+    ]
+    for page in (artist_page, album_page, imports_page):
+        assert page.status_code == 200
+        for value, label in expected_options:
+            assert re.search(rf'<option value="{re.escape(value)}"(?: selected)?>{re.escape(label)}</option>', page.text)
+
+    assert '<select id="artistAlbumConfirmType" name="album_type">' in artist_page.text
+    assert '<select id="aaManualType" name="album_type">' in artist_page.text
+    assert '<select id="albumEditType" name="album_type">' in album_page.text
+    assert '<option value="Live" selected>Live</option>' in album_page.text
+    assert '<select id="albumRefreshType" name="album_type">' in album_page.text
+    assert '<select id="bundleAlbumType" name="album_type">' in imports_page.text
 
 
 class SparseAlbumImporter(MetadataImporter):
@@ -749,6 +804,17 @@ def test_list_details_can_be_renamed(client) -> None:
     assert updated.status_code == 200
     assert updated.json()["name"] == "Top 2026 Gothic Metal"
     assert client.get(f"/lists/{list_id}").status_code == 200
+
+
+def test_list_detail_page_has_visible_delete_action(client) -> None:
+    created_list = client.post("/api/lists", json={"name": "Temporary List"}).json()
+
+    page = client.get(f"/lists/{created_list['id']}")
+
+    assert page.status_code == 200
+    assert '<button type="button" class="danger" id="listDetailDelete">Delete List</button>' in page.text
+    assert f'fetchJson("/api/lists/{created_list["id"]}", {{ method: "DELETE" }})' in page.text
+    assert 'window.location.href = "/lists"' in page.text
 
 
 def test_album_description_renders_imported_notes_on_separate_lines(client) -> None:
@@ -1453,6 +1519,53 @@ def test_empty_best_rated_auto_list_explains_missing_matches(client) -> None:
 
     assert response.status_code == 409
     assert "No rated albums from 2026 and matching 'Doom'" in response.json()["detail"]
+
+
+def test_lists_page_offers_and_preserves_full_length_auto_list_filter(client) -> None:
+    page = client.get("/lists")
+
+    assert page.status_code == 200
+    assert 'id="brFullLengthOnly" type="checkbox" style="width:auto;" checked' in page.text
+    assert "if (brFullLengthOnly) brFullLengthOnly.checked = true;" in page.text
+    assert "full_length_only: fullLengthOnly" in page.text
+    assert 'block.dataset.listFullLengthOnly === "true"' in page.text
+
+
+def test_existing_auto_list_details_can_enable_full_length_filter(client) -> None:
+    album = _create_album(client, title="Full Album", album_type="Full-length")
+    client.put(
+        f"/api/albums/{album['id']}",
+        json={**album, "artist_name": album["artist_name"], "rating": 9, "tracks": []},
+    )
+    generated = client.post(
+        "/api/auto-lists/best-rated",
+        json={"name": "Best Rated", "limit": 10},
+    ).json()
+
+    detail_page = client.get(f"/lists/{generated['id']}")
+
+    assert detail_page.status_code == 200
+    assert 'id="listDetailFullLengthOnly"' in detail_page.text
+    assert "This filter is applied when the automatic list is regenerated." in detail_page.text
+
+    updated = client.put(
+        f"/api/lists/{generated['id']}",
+        json={
+            "name": generated["name"],
+            "description": generated["description"],
+            "year": generated["year"],
+            "genres": generated["genres"],
+            "auto_full_length_only": True,
+        },
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["is_auto"] is True
+    assert updated.json()["auto_full_length_only"] is True
+    assert 'id="listDetailFullLengthOnly"' in client.get(f"/lists/{generated['id']}").text
+    assert 'id="listDetailFullLengthOnly" name="auto_full_length_only" type="checkbox" style="width:auto;" checked' in client.get(
+        f"/lists/{generated['id']}"
+    ).text
 
 
 def test_invalid_settings_model_returns_clear_message(client) -> None:

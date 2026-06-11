@@ -282,6 +282,39 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         color: var(--muted);
         line-height: 1.7;
       }}
+      .album-hero-byline {{
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.5;
+      }}
+      .album-hero-byline a {{
+        color: var(--ink);
+        font-weight: 600;
+        text-decoration: none;
+      }}
+      .album-hero-byline a:hover {{
+        color: var(--accent-strong);
+      }}
+      .album-hero-meta {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+      }}
+      .album-release-pill {{
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        padding: 6px 11px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }}
       .grid {{
         display: grid;
         gap: 18px;
@@ -1142,6 +1175,12 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           font-size: 34px;
           line-height: 1;
         }}
+        .album-hero-byline {{
+          font-size: 15px;
+        }}
+        .album-hero-meta {{
+          margin-top: 12px;
+        }}
         .panel {{
           padding: 16px;
           border-radius: 18px;
@@ -1767,6 +1806,15 @@ def _album_cover_listened_btn(album: AlbumCardRecord) -> str:
     )
 
 
+def _album_type_select(select_id: str, *, name: str = "album_type", selected: str | None = None) -> str:
+    options = [("", "Not set"), ("Full-length", "Full-length"), ("EP", "EP"), ("Single", "Single"), ("Live", "Live")]
+    option_markup = "".join(
+        f'<option value="{value}"{" selected" if selected is not None and value == selected else ""}>{label}</option>'
+        for value, label in options
+    )
+    return f'<select id="{select_id}" name="{name}">{option_markup}</select>'
+
+
 def _album_listened_button(album: AlbumCardRecord) -> str:
     listened = bool(album.listened_at)
     return (
@@ -1821,7 +1869,7 @@ def _list_markup(record: AlbumListRecord, all_albums: "list[AlbumCardRecord] | N
             </form>
           </div>"""
     return f"""
-      <section class="list-block" data-list-id="{record.id}" data-name="{_escape(record.name.lower())}" data-list-name="{_escape(record.name)}" data-list-year="{_escape(str(record.year or ''))}" data-list-genres="{_escape(json.dumps(record.genres))}" data-list-limit="{record.auto_limit or max(len(record.items), 10)}">
+      <section class="list-block" data-list-id="{record.id}" data-name="{_escape(record.name.lower())}" data-list-name="{_escape(record.name)}" data-list-year="{_escape(str(record.year or ''))}" data-list-genres="{_escape(json.dumps(record.genres))}" data-list-limit="{record.auto_limit or max(len(record.items), 10)}" data-list-full-length-only="{str(record.auto_full_length_only).lower()}">
         <div class="list-head" data-toggle="list-body-{record.id}">
           <div>
             <h3 style="margin:0;">{_escape(record.name)}{"&nbsp;<span style='font-size:11px; font-weight:600; letter-spacing:.04em; color:var(--accent); background:color-mix(in srgb, var(--accent) 12%, transparent); padding:2px 7px; border-radius:10px; vertical-align:middle;'>AUTO</span>" if record.is_auto else ""}</h3>
@@ -2438,7 +2486,7 @@ def render_artist_detail_page(
             </div>
             <div class="form-field">
               <label class="form-label" for="artistAlbumConfirmType">Type</label>
-              <input id="artistAlbumConfirmType" name="album_type" placeholder="e.g. Full-length, EP, Single">
+              {_album_type_select("artistAlbumConfirmType")}
             </div>
             <div class="form-field">
               <label class="form-label" for="artistAlbumConfirmNotes">Album Description</label>
@@ -2483,7 +2531,7 @@ def render_artist_detail_page(
             <div class="row">
               <div class="form-field" style="flex:1;">
                 <label class="form-label" for="aaManualType">Type</label>
-                <input id="aaManualType" name="album_type" placeholder="e.g. Full-length, EP, Single">
+                {_album_type_select("aaManualType")}
               </div>
             </div>
             <div class="form-field">
@@ -2970,7 +3018,7 @@ def render_imports_page(settings: SettingsRecord) -> str:
               </div>
               <div class="form-field">
                 <label class="form-label" for="bundleAlbumType">Type</label>
-                <input id="bundleAlbumType" name="album_type" placeholder="Full-length, EP, Single">
+                __BUNDLE_ALBUM_TYPE_SELECT__
               </div>
             </div>
             <div class="form-field">
@@ -3214,6 +3262,7 @@ def render_imports_page(settings: SettingsRecord) -> str:
         });
       </script>
     """
+    body = body.replace("__BUNDLE_ALBUM_TYPE_SELECT__", _album_type_select("bundleAlbumType"))
     state = {"settings": settings.model_dump(), "album_detail_link": "/albums"}
     return _shell("Imports | Album Ranker", "imports", body, page_state=state)
 
@@ -3389,12 +3438,17 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
     star_initial_label = f"{album.rating}/10" if album.rating else "Rate this album"
     cover_action_label = "Change cover" if album.cover_image_path else "Upload cover"
     cover_action_title = "Click to change the cover image" if album.cover_image_path else "Click to upload a cover image"
-    album_title_line = album.title + (f" - {album.release_year}" if album.release_year else "")
+    release_year_meta = (
+        f'<div class="album-hero-meta"><span class="album-release-pill">Released {_escape(str(album.release_year))}</span></div>'
+        if album.release_year
+        else ""
+    )
     body = f"""
       <section class="hero">
         <div class="eyebrow">Album Details</div>
-        <h1><a href="/artists/{album.artist_id}" style="text-decoration:none;">{_escape(album.artist_name)}</a></h1>
-        <p>{_escape(album_title_line)}</p>
+        <h1>{_escape(album.title)}</h1>
+        <div class="album-hero-byline">by <a href="/artists/{album.artist_id}">{_escape(album.artist_name)}</a></div>
+        {release_year_meta}
       </section>
       <section class="detail-layout">
         <div>
@@ -3519,7 +3573,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               </div>
               <div class="form-field">
                 <label class="form-label" for="albumEditType">Type</label>
-                <input id="albumEditType" name="album_type" value="{_escape(album.album_type or '')}" placeholder="e.g. Full-length, EP, Single">
+                {_album_type_select("albumEditType", selected=album.album_type)}
               </div>
               <div class="form-field">
                 <label class="form-label" for="albumEditDescription">Album Description</label>
@@ -3599,7 +3653,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           </div>
           <div class="form-field">
             <label class="form-label">Type</label>
-            <input name="album_type" id="albumRefreshType" placeholder="e.g. Full-length, EP">
+            {_album_type_select("albumRefreshType")}
           </div>
           <div class="form-field">
             <label class="form-label">Cover Source URL</label>
@@ -4064,6 +4118,10 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
               <label class="form-label">Genres (leave empty for all)</label>
               {genre_picker_br}
             </div>
+            <label style="display:flex; align-items:center; gap:8px; margin-top:12px; cursor:pointer;">
+              <input id="brFullLengthOnly" type="checkbox" style="width:auto;" checked>
+              <span>Only full-length albums</span>
+            </label>
             <div class="form-field" style="margin-top:8px;">
               <label class="form-label">List name</label>
               <input id="brName" type="text" style="width:100%;">
@@ -4128,6 +4186,8 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
         // ── Genre pickers ────────────────────────────────────────────────────
         const createPicker = document.getElementById("createGenrePicker");
         const brPicker = document.getElementById("brGenrePicker");
+        const brFullLengthOnly = document.getElementById("brFullLengthOnly");
+        if (brFullLengthOnly) brFullLengthOnly.checked = true;
 
         // Best Rated wizard ───────────────────────────────────────────────────
         function getBrGenres() {{
@@ -4160,6 +4220,7 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
           const year = document.getElementById("brYear").value;
           const genres = getBrGenres();
           const limit = Number(document.getElementById("brLimit").value) || 10;
+          const fullLengthOnly = brFullLengthOnly.checked;
           try {{
             validateRequired(name, "List name");
             if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error("List size must be between 1 and 500.");
@@ -4171,6 +4232,7 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
                 limit,
                 year: year ? Number(year) : null,
                 genres,
+                full_length_only: fullLengthOnly,
                 update_existing: updateExisting,
               }}),
             }});
@@ -4220,12 +4282,20 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
             let genres = [];
             try {{ genres = JSON.parse(block.dataset.listGenres || "[]"); }} catch(err) {{ genres = []; }}
             const limit = Number(block.dataset.listLimit) || 10;
+            const fullLengthOnly = block.dataset.listFullLengthOnly === "true";
             status.textContent = "Regenerating\u2026";
             btn.disabled = true;
             try {{
               await fetchJson("/api/auto-lists/best-rated", {{
                 method: "POST",
-                body: JSON.stringify({{ name, limit, year, genres, update_existing: true }}),
+                body: JSON.stringify({{
+                  name,
+                  limit,
+                  year,
+                  genres,
+                  full_length_only: fullLengthOnly,
+                  update_existing: true,
+                }}),
               }});
               window.location.hash = "list-body-" + block.dataset.listId;
               window.location.reload();
@@ -4751,6 +4821,13 @@ def render_list_detail_page(settings: SettingsRecord, record: AlbumListRecord, a
             <label class="form-label">Genres</label>
             {genre_picker_detail}
           </div>
+          {f'''
+          <label style="display:flex; align-items:center; gap:8px; margin:12px 0; cursor:pointer;">
+            <input id="listDetailFullLengthOnly" name="auto_full_length_only" type="checkbox" style="width:auto;"{" checked" if record.auto_full_length_only else ""}>
+            <span>Only full-length albums</span>
+          </label>
+          <div class="form-note muted">This filter is applied when the automatic list is regenerated.</div>
+          ''' if record.is_auto else ''}
           <div class="row">
             <button type="submit">Save Details</button>
             <span class="status" id="listDetailStatus"></span>
@@ -4758,7 +4835,11 @@ def render_list_detail_page(settings: SettingsRecord, record: AlbumListRecord, a
         </form>
       </section>
       <section class="panel" style="margin-top:20px;">
-        <div class="detail-head" style="justify-content:flex-end;">
+        <div class="detail-head">
+          <div class="row">
+            <button type="button" class="danger" id="listDetailDelete">Delete List</button>
+            <span class="status" id="listDetailDeleteStatus"></span>
+          </div>
           <a class="button-link secondary" href="/lists">Back to Lists</a>
         </div>
       </section>
@@ -4784,11 +4865,26 @@ def render_list_detail_page(settings: SettingsRecord, record: AlbumListRecord, a
                 description: form.description.value.trim() || null,
                 year: validateYear(form.year.value, "Year"),
                 genres,
+                auto_full_length_only: document.getElementById("listDetailFullLengthOnly")?.checked || false,
               }}),
             }});
             window.location.reload();
           }} catch (error) {{
             status.textContent = error.message;
+          }}
+        }});
+        document.getElementById("listDetailDelete").addEventListener("click", async () => {{
+          if (!window.confirm("Delete this list? This cannot be undone.")) return;
+          const button = document.getElementById("listDetailDelete");
+          const status = document.getElementById("listDetailDeleteStatus");
+          button.disabled = true;
+          status.textContent = "Deleting...";
+          try {{
+            await fetchJson("/api/lists/{record.id}", {{ method: "DELETE" }});
+            window.location.href = "/lists";
+          }} catch (error) {{
+            status.textContent = error.message;
+            button.disabled = false;
           }}
         }});
         document.querySelectorAll(".list-block").forEach((block) => {{
