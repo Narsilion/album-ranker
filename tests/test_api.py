@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import replace
 
@@ -1855,6 +1856,8 @@ def test_album_with_existing_artist_import_skips_artist_draft(client, monkeypatc
     assert response.status_code == 200
     body = response.json()
     assert body["artist_exists"] is True
+    assert body["existing_artist"]["name"] == "For My Pain..."
+    assert body["existing_artist"]["id"] == client.get("/api/artists").json()[0]["id"]
     assert body["artist_draft"] is None
     assert body["album_draft"]["draft_payload"]["artist_name"] == "For My Pain..."
 
@@ -2381,6 +2384,8 @@ def test_imports_page_renders_bundle_flow(client) -> None:
     assert 'id="bundleArtistName" name="artist_name" required disabled' in page.text
     assert "confirmForm.dataset.existingAlbumId = response.existing_album?.id ||" in page.text
     assert "response.album_exists" in page.text
+    assert 'id="albumWithArtistExistingArtistLink"' in page.text
+    assert "existingArtistLink.href = `/artists/${response.existing_artist.id}`" in page.text
     assert 'fetchJson(`/api/albums/${existingAlbumId}`' in page.text
     assert "setArtistDraftEnabled(Boolean(artistDraft))" in page.text
     assert 'id="albumWithArtistArtistSourceUrl" name="artist_source_url"' in page.text
@@ -2554,7 +2559,12 @@ def test_save_writeup_persists_and_renders(client) -> None:
     ).json()
     album_id = album["id"]
 
-    writeup_text = "🎸 Album: Opeth — Blackwater Park\n\n📌 Description:\nA landmark album."
+    youtube_url = "https://music.youtube.com/playlist?list=OLAK5uy_example"
+    writeup_text = (
+        "🎸 Album: Opeth — Blackwater Park\n\n"
+        "📌 Description:\nA landmark album.\n\n"
+        f"🎧 Listen:\n[YouTube Music]({youtube_url}) | Spotify"
+    )
     patch_resp = client.patch(
         f"/api/albums/{album_id}/write-up",
         json={"writeup": writeup_text},
@@ -2567,6 +2577,19 @@ def test_save_writeup_persists_and_renders(client) -> None:
     assert "Blackwater Park" in page.text
     assert "A landmark album." in page.text
     assert "Album Write-up / Telegram Post" in page.text
+    assert 'id="overviewCopyBtn"' in page.text
+    assert "Copy Write-up" in page.text
+    assert "navigator.clipboard.write([item])" in page.text
+    assert "'text/html': new Blob([richHtml]" in page.text
+    telegram_text = writeup_text.replace(f"[YouTube Music]({youtube_url})", "YouTube Music")
+    assert f"const telegramWriteup = {json.dumps(telegram_text, ensure_ascii=True)};" in page.text
+    telegram_html = (
+        "🎸 Album: Opeth — Blackwater Park<br><br>"
+        "📌 Description:<br>A landmark album.<br><br>"
+        f'🎧 Listen:<br><a href="{youtube_url}" target="_blank" rel="noopener noreferrer">YouTube Music</a> | Spotify'
+    )
+    telegram_html_json = json.dumps(telegram_html, ensure_ascii=True).replace("</", "<\\/")
+    assert f"const telegramWriteupHtml = {telegram_html_json};" in page.text
 
 
 def test_save_writeup_null_clears_it(client) -> None:

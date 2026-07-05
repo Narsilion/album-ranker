@@ -386,6 +386,7 @@ class AlbumWithArtistImportResponse(BaseModel):
     album_draft: ImportDraftRecord | None = None
     artist_draft: ImportDraftRecord | None = None
     artist_exists: bool = False
+    existing_artist: ArtistRecord | None = None
     album_exists: bool = False
     existing_album: AlbumDetailRecord | None = None
     artist_source_url: str | None = None

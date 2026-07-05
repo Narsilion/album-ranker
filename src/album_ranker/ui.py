@@ -57,6 +57,13 @@ def _render_writeup(text: str | None) -> str:
     return ''.join(parts)
 
 
+def _telegram_copy_text(text: str | None) -> str:
+    """Convert Markdown links to their labels for the plain-text clipboard fallback."""
+    import re
+
+    return re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", r"\1", text or "")
+
+
 def _rating_markup(rating: int | None) -> str:
     if not rating:
         return ""
@@ -2973,8 +2980,9 @@ def render_imports_page(settings: SettingsRecord) -> str:
           <input type="hidden" id="bundleAlbumDraftId" name="album_draft_id">
           <input type="hidden" id="bundleArtistDraftId" name="artist_draft_id">
           <input type="hidden" id="bundleAlbumArtistName" name="album_artist_name">
-          <div id="albumWithArtistExistingNotice" class="hidden" data-artist-message="Artist already exists. This import will attach the album to the existing artist." data-album-message="Album already exists. Confirming will update the existing album." style="margin-bottom:14px; padding:10px 12px; background:rgba(46,168,124,0.12); border:1px solid rgba(46,168,124,0.32); border-radius:6px;">
-            Artist already exists. This import will attach the album to the existing artist.
+          <div id="albumWithArtistExistingNotice" class="hidden" data-album-message="Album already exists. Confirming will update the existing album." style="margin-bottom:14px; padding:10px 12px; background:rgba(46,168,124,0.12); border:1px solid rgba(46,168,124,0.32); border-radius:6px;">
+            <span id="albumWithArtistExistingMessage"></span>
+            <a id="albumWithArtistExistingArtistLink" class="hidden" href="#" target="_blank">View artist</a>
           </div>
           <div id="albumWithArtistArtistDraft" class="draft hidden" style="margin-bottom:16px;">
             <div class="panel-title">Artist Draft</div>
@@ -3055,6 +3063,8 @@ def render_imports_page(settings: SettingsRecord) -> str:
         const reviewPanel = document.getElementById("albumWithArtistReview");
         const artistDraftPanel = document.getElementById("albumWithArtistArtistDraft");
         const existingNotice = document.getElementById("albumWithArtistExistingNotice");
+        const existingMessage = document.getElementById("albumWithArtistExistingMessage");
+        const existingArtistLink = document.getElementById("albumWithArtistExistingArtistLink");
         const status = document.getElementById("albumWithArtistStatus");
         const confirmStatus = document.getElementById("albumWithArtistConfirmStatus");
         const bundleArtistFieldIds = [
@@ -3110,9 +3120,17 @@ def render_imports_page(settings: SettingsRecord) -> str:
           const artistDraft = response.artist_draft;
           setValue("bundleAlbumDraftId", albumDraft ? albumDraft.id : "");
           setValue("bundleArtistDraftId", artistDraft ? artistDraft.id : "");
-          existingNotice.textContent = response.album_exists
+          existingMessage.textContent = response.album_exists
             ? existingNotice.dataset.albumMessage
-            : existingNotice.dataset.artistMessage;
+            : "Artist already exists. This import will attach the album to the existing artist.";
+          if (response.artist_exists && response.existing_artist?.id) {
+            existingArtistLink.href = `/artists/${response.existing_artist.id}`;
+            existingArtistLink.textContent = `View ${response.existing_artist.name}`;
+            existingArtistLink.classList.remove("hidden");
+          } else {
+            existingArtistLink.href = "#";
+            existingArtistLink.classList.add("hidden");
+          }
           existingNotice.classList.toggle("hidden", !(response.artist_exists || response.album_exists));
           artistDraftPanel.classList.toggle("hidden", !artistDraft);
           setArtistDraftEnabled(Boolean(artistDraft));
@@ -3598,6 +3616,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             <div class="detail-head" style="margin-bottom:4px;">
               <div class="panel-title" style="margin-bottom:0;">Album Write-up / Telegram Post</div>
               <div class="row" style="gap:8px; align-items:center; flex-shrink:0;">
+                {('<button type="button" id="overviewCopyBtn" class="secondary" style="flex:0 0 auto; font-size:0.85em;">Copy Write-up</button>' if album.overview else '')}
                 <button type="button" id="overviewGenerateBtn" class="secondary" style="flex:0 0 auto; font-size:0.85em;">{"✦ Regenerate" if album.overview else "✦ Generate Write-up"}</button>
                 <button type="button" id="overviewCancelBtn" class="secondary hidden" style="flex:0 0 auto; font-size:0.85em;">Cancel</button>
               </div>
@@ -3982,7 +4001,49 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           const rejectBtn = document.getElementById('overviewRejectBtn');
           const saveStatus = document.getElementById('overviewSaveStatus');
           const display = document.getElementById('overviewDisplay');
+          const copyBtn = document.getElementById('overviewCopyBtn');
+          const telegramWriteup = {_json(_telegram_copy_text(album.overview))};
+          const telegramWriteupHtml = {_json(_render_writeup(album.overview).replace(chr(10), "<br>"))};
           let abortCtrl = null;
+
+          async function copyWriteup(text, richHtml) {{
+            if (navigator.clipboard && window.ClipboardItem && window.isSecureContext) {{
+              const item = new ClipboardItem({{
+                'text/plain': new Blob([text], {{ type: 'text/plain' }}),
+                'text/html': new Blob([richHtml], {{ type: 'text/html' }}),
+              }});
+              await navigator.clipboard.write([item]);
+              return;
+            }}
+            const copyArea = document.createElement('div');
+            copyArea.contentEditable = 'true';
+            copyArea.innerHTML = richHtml;
+            copyArea.style.position = 'fixed';
+            copyArea.style.opacity = '0';
+            document.body.appendChild(copyArea);
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(copyArea);
+            selection.removeAllRanges();
+            selection.addRange(range);
+            const copied = document.execCommand('copy');
+            selection.removeAllRanges();
+            copyArea.remove();
+            if (!copied) throw new Error('Copy failed');
+          }}
+
+          copyBtn?.addEventListener('click', async () => {{
+            const originalLabel = copyBtn.textContent;
+            try {{
+              await copyWriteup(telegramWriteup, telegramWriteupHtml);
+              copyBtn.textContent = '\u2713 Copied';
+            }} catch (err) {{
+              copyBtn.textContent = 'Copy failed';
+            }}
+            window.setTimeout(() => {{
+              copyBtn.textContent = originalLabel;
+            }}, 1800);
+          }});
 
           function resetGenerateUI() {{
             progress.style.display = 'none';

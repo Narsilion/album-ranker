@@ -760,7 +760,8 @@ def create_app(
             artist_source_url = payload.source_url
         if not artist_source_url and _is_alterportal_album_url(payload.source_url) and album_data.artist_name:
             artist_source_url = payload.source_url
-        artist_exists = bool(album_data.artist_name and db.get_artist_by_name(album_data.artist_name))
+        existing_artist = db.get_artist_by_name(album_data.artist_name) if album_data.artist_name else None
+        artist_exists = existing_artist is not None
         artist_draft = None
         if existing_album is None and not artist_exists and artist_source_url:
             artist_request = ImportRequest(artist_name=album_data.artist_name, source_url=artist_source_url)
@@ -783,6 +784,7 @@ def create_app(
             album_draft=album_draft,
             artist_draft=artist_draft,
             artist_exists=artist_exists,
+            existing_artist=existing_artist,
             album_exists=existing_album is not None,
             existing_album=existing_album,
             artist_source_url=artist_source_url,

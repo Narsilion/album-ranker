@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import json
+import base64
 import ipaddress
+import json
+import os
 import re
 import socket
 import subprocess
@@ -9,7 +11,7 @@ from html import unescape as _html_unescape
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, unquote, urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from album_ranker.openai_client import AIClientError, AlbumWriteupAIClient, GitHubModelsClient, OpenAIClientError, RoutingWriteupClient
@@ -2147,6 +2149,137 @@ class SourceMetadataImporter:
         }
 
 
+def _extract_spotify_album_url(search_html: str) -> str | None:
+    for raw_href in re.findall(r'(?i)href=["\']([^"\']+)["\']', search_html):
+        href = _html_unescape(raw_href)
+        parsed = urlparse(href)
+        if parsed.netloc.lower().endswith("duckduckgo.com"):
+            href = parse_qs(parsed.query).get("uddg", [""])[0]
+            parsed = urlparse(href)
+        if parsed.netloc.lower() != "open.spotify.com":
+            continue
+        match = re.match(r"^/album/([A-Za-z0-9]+)", parsed.path)
+        if match:
+            return f"https://open.spotify.com/album/{match.group(1)}"
+    return None
+
+
+def _find_spotify_album_url(artist_name: str, album_title: str) -> str | None:
+    spotify_url = _find_spotify_album_url_with_api(artist_name, album_title)
+    if spotify_url:
+        return spotify_url
+
+    query = f'site:open.spotify.com/album "{artist_name}" "{album_title}"'
+    search_url = f"https://html.duckduckgo.com/html/?{urlencode({'q': query})}"
+    try:
+        try:
+            search_html, _ = _fetch_with_urllib(search_url)
+        except (HTTPError, URLError, TimeoutError, ValueError):
+            search_html, _ = _fetch_with_curl(search_url)
+    except Exception:
+        return None
+    return _extract_spotify_album_url(search_html)
+
+
+def _spotify_json_request(url: str, *, data: bytes | None = None, headers: dict[str, str] | None = None) -> dict[str, Any]:
+    request_headers = {
+        "Accept": "application/json",
+        "User-Agent": DEFAULT_HEADERS["User-Agent"],
+    }
+    if headers:
+        request_headers.update(headers)
+    request = Request(url, data=data, headers=request_headers)
+    with urlopen(request, timeout=SOURCE_FETCH_TIMEOUT_SECONDS) as response:
+        raw_bytes = response.read(MAX_SOURCE_BYTES + 1)
+    if len(raw_bytes) > MAX_SOURCE_BYTES:
+        raise ValueError("Spotify response is too large.")
+    data = json.loads(raw_bytes.decode("utf-8", errors="ignore"))
+    if not isinstance(data, dict):
+        raise ValueError("Spotify response is not a JSON object.")
+    return data
+
+
+def _find_spotify_album_url_with_api(artist_name: str, album_title: str) -> str | None:
+    client_id = os.environ.get("SPOTIFY_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("SPOTIFY_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        return None
+
+    try:
+        credentials = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+        token_data = _spotify_json_request(
+            "https://accounts.spotify.com/api/token",
+            data=urlencode({"grant_type": "client_credentials"}).encode("ascii"),
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+        access_token = str(token_data.get("access_token") or "")
+        if not access_token:
+            return None
+        query = f'album:"{album_title}" artist:"{artist_name}"'
+        search_data = _spotify_json_request(
+            f"https://api.spotify.com/v1/search?{urlencode({'type': 'album', 'limit': '5', 'q': query})}",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    except Exception:
+        return None
+
+    albums = search_data.get("albums")
+    if not isinstance(albums, dict):
+        return None
+    items = albums.get("items")
+    if not isinstance(items, list):
+        return None
+
+    expected_album = _normalize_lookup_text(album_title)
+    expected_artist = _normalize_lookup_text(artist_name)
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_name = _normalize_lookup_text(str(item.get("name") or ""))
+        artists = item.get("artists")
+        if item_name != expected_album or not isinstance(artists, list):
+            continue
+        artist_names = {
+            _normalize_lookup_text(str(artist.get("name") or ""))
+            for artist in artists
+            if isinstance(artist, dict)
+        }
+        if expected_artist not in artist_names:
+            continue
+        external_urls = item.get("external_urls")
+        spotify_url = external_urls.get("spotify") if isinstance(external_urls, dict) else None
+        if isinstance(spotify_url, str) and spotify_url.startswith("https://open.spotify.com/album/"):
+            return spotify_url.split("?", 1)[0]
+    return None
+
+
+def _normalize_lookup_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+
+def _spotify_album_search_url(artist_name: str, album_title: str) -> str:
+    query = quote(f'album:"{album_title}" artist:"{artist_name}"', safe="")
+    return f"https://open.spotify.com/search/{query}/albums"
+
+
+def _ensure_spotify_writeup_link(writeup: str, spotify_url: str | None) -> str:
+    if not spotify_url or f"]({spotify_url})" in writeup:
+        return writeup
+    listen_line = re.compile(
+        r"(?im)^((?:🎧\s*)?(?:Listen|Слушать)\s*:\s*\n+)([^\n]+)$"
+    )
+
+    def add_link(match: re.Match[str]) -> str:
+        services = match.group(2)
+        linked_services = re.sub(r"(?<!\[)\bSpotify\b(?!\])", f"[Spotify]({spotify_url})", services)
+        return match.group(1) + linked_services
+
+    return listen_line.sub(add_link, writeup, count=1)
+
+
 class AlbumWriteupGenerator:
     def __init__(self, client: AlbumWriteupAIClient | GitHubModelsClient | RoutingWriteupClient | None) -> None:
         self.client = client
@@ -2201,17 +2334,27 @@ class AlbumWriteupGenerator:
             stream_line = f"\nStream URL: {album.album_stream_url}"
         stream_host = urlparse(album.album_stream_url or "").netloc.lower()
         has_spotify_stream = "spotify.com" in stream_host
-        listen_line_example = (
-            "YouTube Music | [Spotify](https://open.spotify.com/...)"
-            if has_spotify_stream
-            else "[YouTube Music](https://music.youtube.com/...) | Spotify"
-        )
+        spotify_url_is_exact = has_spotify_stream
+        if has_spotify_stream:
+            spotify_url = album.album_stream_url
+        else:
+            spotify_url = _find_spotify_album_url(album.artist_name, album.title)
+            spotify_url_is_exact = bool(spotify_url)
+            if not spotify_url:
+                spotify_url = _spotify_album_search_url(album.artist_name, album.title)
+        youtube_music_url = album.album_stream_url if "music.youtube.com" in stream_host else None
+        if youtube_music_url and spotify_url:
+            listen_line_example = f"[YouTube Music]({youtube_music_url}) | [Spotify]({spotify_url})"
+        elif spotify_url:
+            listen_line_example = f"YouTube Music | [Spotify]({spotify_url})"
+        else:
+            listen_line_example = f"[YouTube Music]({youtube_music_url}) | Spotify" if youtube_music_url else ""
         listen_instruction = (
-            "For the '🎧 Listen' / '🎧 Слушать' line: if a Spotify stream URL is provided in the album data, "
-            "use it as [Spotify](url) and mention YouTube Music as plain text before it, exactly like "
-            "'YouTube Music | [Spotify](url)'. If a YouTube Music stream URL is provided in the album data, "
-            "use it as [YouTube Music](url) and mention Spotify as plain text after it, exactly like "
-            "'[YouTube Music](url) | Spotify'. Always mention both sources when a supported stream URL is known. "
+            "For the '🎧 Listen' / '🎧 Слушать' line, use every exact streaming URL supplied below as a Markdown link. "
+            "When both URLs are known, write '[YouTube Music](url) | [Spotify](url)'. "
+            "When only Spotify is known, write 'YouTube Music | [Spotify](url)'. "
+            "When only YouTube Music is known, write '[YouTube Music](url) | Spotify'. "
+            "Always mention both services when at least one supported stream URL is known. "
             "If no stream URL is known, omit the Listen line entirely.\n"
         )
 
@@ -2226,6 +2369,10 @@ class AlbumWriteupGenerator:
             f"Tracklist:\n{tracklist_text}",
             stream_line,
         ]
+        if spotify_url and not has_spotify_stream and spotify_url_is_exact:
+            context_parts.append(f"Spotify URL found for album: {spotify_url}")
+        elif spotify_url and not has_spotify_stream:
+            context_parts.append(f"Spotify album search URL: {spotify_url}")
         if page_excerpt:
             context_parts.append(f"\nSource page excerpt (Metal Archives or similar):\n{page_excerpt[:6000]}")
         if wiki_excerpt:
@@ -2290,7 +2437,7 @@ class AlbumWriteupGenerator:
                 schema=schema,
             )
             self._mark_success()
-            return str(data["overview"])
+            return _ensure_spotify_writeup_link(str(data["overview"]), spotify_url)
         except (OpenAIClientError, AIClientError) as exc:
             self._mark_failure(str(exc))
             raise

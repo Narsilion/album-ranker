@@ -276,6 +276,7 @@ def test_metadata_importer_delegates_source_and_writeup_responsibilities() -> No
 
 def test_album_writeup_prompt_links_youtube_music_when_stream_url_is_youtube(monkeypatch) -> None:
     monkeypatch.setattr(importer, "_fetch_url_excerpt", lambda url: "")
+    monkeypatch.setattr(importer, "_find_spotify_album_url", lambda artist_name, album_title: None)
     captured = {}
 
     class FakeClient:
@@ -299,9 +300,10 @@ def test_album_writeup_prompt_links_youtube_music_when_stream_url_is_youtube(mon
     )
 
     prompt = captured["prompt"]
-    assert "[YouTube Music](https://music.youtube.com/...) | Spotify" in prompt
-    assert "'[YouTube Music](url) | Spotify'" in prompt
-    assert "[Spotify](https://open.spotify.com/...)" not in prompt
+    spotify_search_url = "https://open.spotify.com/search/album%3A%22Album%22%20artist%3A%22Band%22/albums"
+    assert f"[YouTube Music](https://music.youtube.com/playlist?list=test) | [Spotify]({spotify_search_url})" in prompt
+    assert f"Spotify album search URL: {spotify_search_url}" in prompt
+    assert "When only YouTube Music is known, write '[YouTube Music](url) | Spotify'." in prompt
 
 
 def test_album_writeup_prompt_links_spotify_when_stream_url_is_spotify(monkeypatch) -> None:
@@ -329,9 +331,141 @@ def test_album_writeup_prompt_links_spotify_when_stream_url_is_spotify(monkeypat
     )
 
     prompt = captured["prompt"]
-    assert "YouTube Music | [Spotify](https://open.spotify.com/...)" in prompt
-    assert "'YouTube Music | [Spotify](url)'" in prompt
-    assert "[YouTube Music](https://music.youtube.com/...)" not in prompt
+    assert "YouTube Music | [Spotify](https://open.spotify.com/album/test)" in prompt
+    assert "When only Spotify is known, write 'YouTube Music | [Spotify](url)'." in prompt
+    assert "[YouTube Music](https://music.youtube.com/" not in prompt
+
+
+def test_extract_spotify_album_url_from_search_redirect() -> None:
+    html = """
+    <a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fopen.spotify.com%2Falbum%2F4LH4d3cOWNNsVw41Gqt2kv%3Fsi%3Dtest">
+      Pink Floyd - The Dark Side of the Moon
+    </a>
+    """
+
+    assert importer._extract_spotify_album_url(html) == (
+        "https://open.spotify.com/album/4LH4d3cOWNNsVw41Gqt2kv"
+    )
+
+
+def test_find_spotify_album_url_uses_spotify_api_when_configured(monkeypatch) -> None:
+    requests = []
+
+    def fake_spotify_json_request(url, *, data=None, headers=None):
+        requests.append((url, data, headers))
+        if url == "https://accounts.spotify.com/api/token":
+            return {"access_token": "token"}
+        return {
+            "albums": {
+                "items": [
+                    {
+                        "name": "Arbor",
+                        "artists": [{"name": "Wazzara"}],
+                        "external_urls": {
+                            "spotify": "https://open.spotify.com/album/abc123?si=test",
+                        },
+                    }
+                ]
+            }
+        }
+
+    monkeypatch.setenv("SPOTIFY_CLIENT_ID", "client-id")
+    monkeypatch.setenv("SPOTIFY_CLIENT_SECRET", "client-secret")
+    monkeypatch.setattr(importer, "_spotify_json_request", fake_spotify_json_request)
+
+    assert importer._find_spotify_album_url("Wazzara", "Arbor") == "https://open.spotify.com/album/abc123"
+    assert requests[0][0] == "https://accounts.spotify.com/api/token"
+    assert requests[1][0].startswith("https://api.spotify.com/v1/search?")
+
+
+def test_find_spotify_album_url_falls_back_to_search_html(monkeypatch) -> None:
+    search_html = """
+    <a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fopen.spotify.com%2Falbum%2Ffallback123">
+      Wazzara - Arbor
+    </a>
+    """
+
+    monkeypatch.delenv("SPOTIFY_CLIENT_ID", raising=False)
+    monkeypatch.delenv("SPOTIFY_CLIENT_SECRET", raising=False)
+    monkeypatch.setattr(importer, "_fetch_with_urllib", lambda url: (search_html, "text/html"))
+
+    assert importer._find_spotify_album_url("Wazzara", "Arbor") == "https://open.spotify.com/album/fallback123"
+
+
+def test_album_writeup_adds_spotify_search_result_to_prompt_and_output(monkeypatch) -> None:
+    monkeypatch.setattr(importer, "_fetch_url_excerpt", lambda url: "")
+    spotify_url = "https://open.spotify.com/album/4LH4d3cOWNNsVw41Gqt2kv"
+    monkeypatch.setattr(importer, "_find_spotify_album_url", lambda artist_name, album_title: spotify_url)
+    captured = {}
+
+    class FakeClient:
+        def generate_json(self, **kwargs):
+            captured["prompt"] = kwargs["user_prompt"]
+            return {
+                "overview": (
+                    "🎸 Album: Pink Floyd — The Dark Side of the Moon\n\n"
+                    "🎧 Listen:\n"
+                    "[YouTube Music](https://music.youtube.com/playlist?list=test) | Spotify"
+                )
+            }
+
+    generator = importer.AlbumWriteupGenerator(FakeClient())
+    result = generator.generate_album_writeup(
+        AlbumDetailRecord(
+            id=1,
+            artist_id=1,
+            artist_name="Pink Floyd",
+            title="The Dark Side of the Moon",
+            album_stream_url="https://music.youtube.com/playlist?list=test",
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        ),
+        language="en",
+        model="gpt-5",
+    )
+
+    assert f"Spotify URL found for album: {spotify_url}" in captured["prompt"]
+    assert (
+        f"[YouTube Music](https://music.youtube.com/playlist?list=test) | [Spotify]({spotify_url})"
+        in captured["prompt"]
+    )
+    assert f"| [Spotify]({spotify_url})" in result
+
+
+def test_album_writeup_links_spotify_search_when_exact_album_url_is_unknown(monkeypatch) -> None:
+    monkeypatch.setattr(importer, "_fetch_url_excerpt", lambda url: "")
+    monkeypatch.setattr(importer, "_find_spotify_album_url", lambda artist_name, album_title: None)
+    spotify_search_url = "https://open.spotify.com/search/album%3A%22Arbor%22%20artist%3A%22Wazzara%22/albums"
+    captured = {}
+
+    class FakeClient:
+        def generate_json(self, **kwargs):
+            captured["prompt"] = kwargs["user_prompt"]
+            return {
+                "overview": (
+                    "🎸 Album: Wazzara — Arbor\n\n"
+                    "🎧 Listen:\n"
+                    "[YouTube Music](https://music.youtube.com/playlist?list=test) | Spotify"
+                )
+            }
+
+    generator = importer.AlbumWriteupGenerator(FakeClient())
+    result = generator.generate_album_writeup(
+        AlbumDetailRecord(
+            id=153,
+            artist_id=142,
+            artist_name="Wazzara",
+            title="Arbor",
+            album_stream_url="https://music.youtube.com/playlist?list=test",
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        ),
+        language="ru",
+        model="gpt-5",
+    )
+
+    assert f"Spotify album search URL: {spotify_search_url}" in captured["prompt"]
+    assert f"| [Spotify]({spotify_search_url})" in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
