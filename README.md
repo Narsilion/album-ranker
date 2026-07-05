@@ -97,6 +97,18 @@ Default URL:
 http://127.0.0.1:8780
 ```
 
+## Spotlight Launcher
+
+Install the macOS Spotlight launcher once:
+
+```bash
+scripts/install_spotlight_launcher.sh
+```
+
+After that, press Spotlight, type `Album Ranker`, and press Enter. The launcher will source `~/.zshrc`, create `.venv` and install the app if needed, start the local server if it is not already running, and open `http://127.0.0.1:8780`.
+
+Launcher logs are written to `.data/launcher.log`. Server logs are written to `.data/server.log`.
+
 ## Reinstall After Code Changes
 
 This repo is often run from a non-editable install in the local `.venv`. If a UI or backend change does not appear in the running app, reinstall the package:
