@@ -3623,10 +3623,10 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             </div>
             <div style="display:flex; gap:12px; align-items:center; margin-bottom:4px;">
               <label style="font-size:0.85em; color:var(--muted); display:flex; align-items:center; gap:4px; cursor:pointer; flex:0 0 auto;">
-                <input type="radio" name="overviewLang" value="en" {"checked" if True else ""}> English
+                <input type="radio" name="overviewLang" value="en"> English
               </label>
               <label style="font-size:0.85em; color:var(--muted); display:flex; align-items:center; gap:4px; cursor:pointer; flex:0 0 auto;">
-                <input type="radio" name="overviewLang" value="ru"> Russian
+                <input type="radio" name="overviewLang" value="ru" checked> Russian
               </label>
             </div>
             <div id="overviewProgress" style="display:none; margin:8px 0 4px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
@@ -4058,7 +4058,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           }});
 
           generateBtn.addEventListener('click', async () => {{
-            const lang = document.querySelector('input[name="overviewLang"]:checked')?.value || 'en';
+            const lang = document.querySelector('input[name="overviewLang"]:checked')?.value || 'ru';
             abortCtrl = new AbortController();
             generateBtn.classList.add('hidden');
             cancelBtn.classList.remove('hidden');

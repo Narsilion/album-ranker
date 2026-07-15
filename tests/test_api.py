@@ -2577,6 +2577,7 @@ def test_save_writeup_persists_and_renders(client) -> None:
     assert "Blackwater Park" in page.text
     assert "A landmark album." in page.text
     assert "Album Write-up / Telegram Post" in page.text
+    assert 'name="overviewLang" value="ru" checked' in page.text
     assert 'id="overviewCopyBtn"' in page.text
     assert "Copy Write-up" in page.text
     assert "navigator.clipboard.write([item])" in page.text
