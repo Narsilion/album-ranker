@@ -38,3 +38,14 @@ def test_load_settings_strips_valid_model_name(monkeypatch, tmp_path) -> None:
 
     assert settings.port == 8781
     assert settings.model == "gpt-5-mini"
+
+
+def test_load_settings_defaults_to_terra_and_openai(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ALBUM_RANKER_MODEL", raising=False)
+    monkeypatch.setenv("ALBUM_RANKER_AI_PROVIDER", "github")
+
+    settings = load_settings()
+
+    assert settings.model == "gpt-5.6-terra"
+    assert settings.ai_provider == "openai"

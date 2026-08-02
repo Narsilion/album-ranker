@@ -242,6 +242,9 @@ def test_metadata_importer_delegates_source_and_writeup_responsibilities() -> No
             self.writeup_called = True
             return f"{album.artist_name} - {album.title}"
 
+        def generate_artist_description(self, artist_name, *, origin, album_title, genre, source_url, model):
+            return f"Description of {artist_name}"
+
     source = FakeSourceImporter()
     writeup = FakeWriteupGenerator()
     metadata_importer = importer.MetadataImporter(
@@ -274,15 +277,110 @@ def test_metadata_importer_delegates_source_and_writeup_responsibilities() -> No
     assert metadata_importer.last_diagnostics == {"mode": "fake_source"}
 
 
+def test_artist_description_generator_uses_source_context_and_selected_model(monkeypatch) -> None:
+    excerpts = {
+        "https://example.com/the-haunted-youth": "Belgian dream pop project led by Joachim Liebens.",
+    }
+    monkeypatch.setattr(importer, "_fetch_url_excerpt", lambda url: excerpts.get(url, ""))
+    captured = {}
+
+    class FakeClient:
+        def generate_json_with_web_search(self, **kwargs):
+            captured.update(kwargs)
+            return (
+                {
+                    "description": "The Haunted Youth is a Belgian dream-pop project.",
+                    "sources": [
+                        {"title": "Official artist", "url": "https://thehauntedyouth.com"},
+                        {"title": "Invalid", "url": "javascript:alert(1)"},
+                    ],
+                },
+                [{"title": "Artist source", "url": "https://example.com/the-haunted-youth"}],
+            )
+
+    generator = importer.AlbumWriteupGenerator(FakeClient())
+    description = generator.generate_artist_description(
+        "The Haunted Youth",
+        origin="Belgium",
+        album_title="Boys Cry Too",
+        genre="Dream Pop",
+        source_url="https://example.com/the-haunted-youth",
+        model="gpt-5.4-mini",
+    )
+
+    assert description == "The Haunted Youth is a Belgian dream-pop project."
+    assert captured["model"] == "gpt-5.4-mini"
+    assert captured["schema_name"] == "artist_description"
+    assert "Belgian dream pop project" in captured["user_prompt"]
+    assert "Use web search" in captured["system_prompt"]
+    assert "Search the web for the exact band" in captured["user_prompt"]
+    assert "quote the artist name" in captured["user_prompt"]
+    assert "60 to 90 words" in captured["user_prompt"]
+    assert "listener, follower, or play counts" in captured["user_prompt"]
+    assert "Do not use Reddit" in captured["user_prompt"]
+    assert "Imported album: Boys Cry Too" in captured["user_prompt"]
+    assert generator.last_artist_description_sources == [
+        {"title": "Official artist", "url": "https://thehauntedyouth.com"},
+        {"title": "Artist source", "url": "https://example.com/the-haunted-youth"},
+    ]
+
+
+def test_album_writeup_strips_inline_web_citations() -> None:
+    text = (
+        "A factual sentence. ([Example](https://example.com/review?utm_source=openai))\n\n"
+        "🎧 Listen:\n[Spotify](https://open.spotify.com/album/test)"
+    )
+
+    assert importer._strip_inline_web_citations(text) == (
+        "A factual sentence.\n\n🎧 Listen:\n[Spotify](https://open.spotify.com/album/test)"
+    )
+
+
+def test_album_writeup_appends_missing_listen_block_deterministically() -> None:
+    result = importer._ensure_writeup_listen_links(
+        "🎸 Альбом: Grimveil — Beneath the Veil of Silent Woods\n\n📌 Описание:\nТекст.",
+        youtube_music_url="https://music.youtube.com/playlist?list=album",
+        spotify_url="https://open.spotify.com/search/album-query/albums",
+        language="ru",
+    )
+
+    assert result.endswith(
+        "🎧 Слушать:\n"
+        "[YouTube Music](https://music.youtube.com/playlist?list=album) | "
+        "[Spotify](https://open.spotify.com/search/album-query/albums)"
+    )
+
+
+def test_album_writeup_replaces_incomplete_listen_block_deterministically() -> None:
+    result = importer._ensure_writeup_listen_links(
+        "Write-up.\n\n🎧 Listen:\nYouTube Music | Spotify",
+        youtube_music_url="https://music.youtube.com/playlist?list=album",
+        spotify_url="https://open.spotify.com/album/exact",
+        language="en",
+    )
+
+    assert result == (
+        "Write-up.\n\n🎧 Listen:\n"
+        "[YouTube Music](https://music.youtube.com/playlist?list=album) | "
+        "[Spotify](https://open.spotify.com/album/exact)"
+    )
+
+
 def test_album_writeup_prompt_links_youtube_music_when_stream_url_is_youtube(monkeypatch) -> None:
     monkeypatch.setattr(importer, "_fetch_url_excerpt", lambda url: "")
     monkeypatch.setattr(importer, "_find_spotify_album_url", lambda artist_name, album_title: None)
     captured = {}
 
     class FakeClient:
-        def generate_json(self, **kwargs):
+        def generate_json_with_web_search(self, **kwargs):
             captured["prompt"] = kwargs["user_prompt"]
-            return {"overview": "Generated write-up."}
+            return (
+                {
+                    "overview": "Generated write-up.",
+                    "sources": [{"title": "Album review", "url": "https://example.com/review"}],
+                },
+                [],
+            )
 
     generator = importer.AlbumWriteupGenerator(FakeClient())
     generator.generate_album_writeup(
@@ -304,6 +402,13 @@ def test_album_writeup_prompt_links_youtube_music_when_stream_url_is_youtube(mon
     assert f"[YouTube Music](https://music.youtube.com/playlist?list=test) | [Spotify]({spotify_search_url})" in prompt
     assert f"Spotify album search URL: {spotify_search_url}" in prompt
     assert "When only YouTube Music is known, write '[YouTube Music](url) | Spotify'." in prompt
+    assert "Research public user/community ratings" in prompt
+    assert "Do not convert scales" in prompt
+    assert "exact page supporting every reported rating" in prompt
+    assert "do not put inline citations" in prompt
+    assert generator.last_album_writeup_sources == [
+        {"title": "Album review", "url": "https://example.com/review"}
+    ]
 
 
 def test_album_writeup_prompt_links_spotify_when_stream_url_is_spotify(monkeypatch) -> None:
@@ -1254,6 +1359,51 @@ def test_ytm_album_draft_uses_ytm_page_tracks_not_playlist_page(monkeypatch) -> 
     assert draft.tracks[7].duration_seconds == 728
     # Total duration should be sum of all tracks
     assert draft.duration_seconds == sum(t.duration_seconds for t in draft.tracks if t.duration_seconds)
+
+
+def test_ytm_album_draft_extracts_artist_from_current_metadata_shape(monkeypatch) -> None:
+    og_html = """
+    <html>
+      <head>
+        <meta property="og:title" content="South of Here">
+        <meta property="og:description" content="Album • Nathaniel Rateliff &amp; The Night Sweats">
+      </head>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (og_html, "text/html"))
+    monkeypatch.setattr(importer, "_fetch_ytm_full_page", lambda url: "")
+    monkeypatch.setattr(importer, "_extract_yt_playlist_tracks", lambda pid: [])
+
+    draft = importer._best_effort_album_draft(
+        ImportRequest(
+            artist_name="",
+            source_url="https://music.youtube.com/playlist?list=OLAK5uy_khCwUHay5bEvkwb_3ZkyUx-JflMifEThc",
+        )
+    )
+
+    assert draft.album_title == "South of Here"
+    assert draft.artist_name == "Nathaniel Rateliff & The Night Sweats"
+
+
+def test_ytm_artist_draft_extracts_artist_from_current_metadata_shape(monkeypatch) -> None:
+    og_html = """
+    <html>
+      <head>
+        <meta property="og:title" content="South of Here">
+        <meta property="og:description" content="Album • Nathaniel Rateliff &amp; The Night Sweats">
+      </head>
+    </html>
+    """
+    monkeypatch.setattr(importer, "_fetch_url_document", lambda url: (og_html, "text/html"))
+
+    draft = importer._best_effort_artist_draft(
+        ImportRequest(
+            artist_name="",
+            source_url="https://music.youtube.com/playlist?list=OLAK5uy_khCwUHay5bEvkwb_3ZkyUx-JflMifEThc",
+        )
+    )
+
+    assert draft.artist_name == "Nathaniel Rateliff & The Night Sweats"
 
 
 def test_ytm_album_draft_decodes_album_data_with_escaped_quotes(monkeypatch) -> None:

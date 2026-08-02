@@ -14,7 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
-from album_ranker.openai_client import AIClientError, AlbumWriteupAIClient, GitHubModelsClient, OpenAIClientError, RoutingWriteupClient
+from album_ranker.openai_client import AIClientError, AlbumWriteupAIClient, OpenAIClientError
 from album_ranker.schemas import AlbumDetailRecord, AlbumDraftData, ArtistDraftData, ImportRequest, display_to_seconds
 
 DEFAULT_HEADERS = {
@@ -1103,6 +1103,32 @@ def _ytm_text(obj: Any) -> str:
     return ""
 
 
+def _extract_ytm_artist_name(
+    metadata: dict[str, Any],
+    objects: list[dict[str, Any]] | None = None,
+) -> str:
+    """Extract an artist across the old and current YouTube Music metadata shapes."""
+    title = str(metadata.get("title") or "").strip()
+    by_m = re.search(r"\s*-\s*(?:Album\s+by|EP\s+by|Single\s+by)\s+(.+)", title, re.IGNORECASE)
+    if by_m:
+        return by_m.group(1).strip()
+
+    for obj in objects or []:
+        for strapline in _find_all_by_key(obj, "straplineTextOne"):
+            artist_name = _ytm_text(strapline).strip()
+            if artist_name:
+                return artist_name
+
+    description = str(metadata.get("description") or "").strip()
+    type_m = re.match(r"^(?:Album|EP|Single)\s*[\u2022\u00b7]\s*(.+)$", description, re.IGNORECASE)
+    if type_m:
+        return type_m.group(1).strip()
+    listen_m = re.search(r"\bby\s+(.+?)\s+on\s+YouTube Music\b", description, re.IGNORECASE)
+    if listen_m:
+        return listen_m.group(1).strip()
+    return ""
+
+
 def _ytm_thumbnail_url(obj: Any) -> str | None:
     if not isinstance(obj, dict):
         return None
@@ -1484,6 +1510,8 @@ def _youtube_music_album_draft(request: ImportRequest, html: str, metadata: dict
 
     # Decode the YTM initialData objects once; reuse for both year and tracks.
     ytm_objects = _decode_ytm_initial_data_objects(ytm_raw) if ytm_raw else []
+    if not artist_name:
+        artist_name = _extract_ytm_artist_name(metadata, ytm_objects)
 
     # Release year from the subtitle initialData field ("Album • 2026").
     release_year = _extract_ytm_year_from_objects(ytm_objects)
@@ -1648,6 +1676,8 @@ def _best_effort_artist_draft(request: ImportRequest) -> ArtistDraftData:
     source_label = str(metadata.get("source_label") or _host_label(request.source_url) or "")
     if "music.youtube.com" in source_label:
         artist_name = request.artist_name.strip()
+        if not artist_name:
+            artist_name = _extract_ytm_artist_name(metadata)
         if not artist_name:
             title = str(metadata.get("title") or "").strip()
             by_m = re.search(r"\s*-\s*(?:Album\s+by|EP\s+by|Single\s+by)\s+(.+)", title, re.IGNORECASE)
@@ -2280,11 +2310,40 @@ def _ensure_spotify_writeup_link(writeup: str, spotify_url: str | None) -> str:
     return listen_line.sub(add_link, writeup, count=1)
 
 
+def _ensure_writeup_listen_links(
+    writeup: str,
+    *,
+    youtube_music_url: str | None,
+    spotify_url: str | None,
+    language: str,
+) -> str:
+    """Deterministically add or replace the Listen block after AI generation."""
+    if not youtube_music_url and not spotify_url:
+        return writeup
+    youtube = f"[YouTube Music]({youtube_music_url})" if youtube_music_url else "YouTube Music"
+    spotify = f"[Spotify]({spotify_url})" if spotify_url else "Spotify"
+    label = "Слушать" if language == "ru" else "Listen"
+    block = f"🎧 {label}:\n{youtube} | {spotify}"
+    listen_block = re.compile(
+        r"(?im)^(?:🎧\s*)?(?:Listen|Слушать)\s*:\s*\n+[^\n]*"
+    )
+    if listen_block.search(writeup):
+        return listen_block.sub(block, writeup, count=1)
+    return f"{writeup.rstrip()}\n\n{block}"
+
+
+def _strip_inline_web_citations(writeup: str) -> str:
+    """Remove Responses API inline web citations; sources are shown separately in the UI."""
+    return re.sub(r"\s*\(\[[^\]]+\]\(https?://[^)]+\)\)", "", writeup)
+
+
 class AlbumWriteupGenerator:
-    def __init__(self, client: AlbumWriteupAIClient | GitHubModelsClient | RoutingWriteupClient | None) -> None:
+    def __init__(self, client: AlbumWriteupAIClient | None) -> None:
         self.client = client
         self.last_request_failed = False
         self.last_error: str | None = None
+        self.last_artist_description_sources: list[dict[str, str]] = []
+        self.last_album_writeup_sources: list[dict[str, str]] = []
 
     def _mark_success(self) -> None:
         self.last_request_failed = False
@@ -2298,9 +2357,126 @@ class AlbumWriteupGenerator:
         # Compatibility wrapper for callers that still use the old "overview" name.
         return self.generate_album_writeup(album, language=language, model=model)
 
+    def generate_artist_description(
+        self,
+        artist_name: str,
+        *,
+        origin: str | None,
+        album_title: str | None,
+        genre: str | None,
+        source_url: str | None,
+        model: str,
+    ) -> str:
+        if self.client is None:
+            raise AIClientError("No AI client is configured")
+        self.last_artist_description_sources = []
+
+        source_excerpt = ""
+        if source_url:
+            try:
+                source_excerpt = _fetch_url_excerpt(source_url)
+            except Exception:
+                pass
+
+        wikipedia_excerpt = ""
+        try:
+            wikipedia_excerpt = _fetch_url_excerpt(wikipedia_artist_url_from_name(artist_name))
+        except Exception:
+            pass
+
+        context_parts = [
+            f"Artist: {artist_name}",
+            f"Origin: {origin or 'unknown'}",
+            f"Imported album: {album_title or 'unknown'}",
+            f"Imported genre: {genre or 'unknown'}",
+        ]
+        if source_url:
+            context_parts.append(f"Reference URL: {source_url}")
+        if source_excerpt:
+            context_parts.append(f"Reference page excerpt:\n{source_excerpt[:6000]}")
+        if wikipedia_excerpt and wikipedia_excerpt != source_excerpt:
+            context_parts.append(f"Wikipedia excerpt:\n{wikipedia_excerpt[:4000]}")
+
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "description": {"type": "string"},
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "title": {"type": "string"},
+                            "url": {"type": "string"},
+                        },
+                        "required": ["title", "url"],
+                    },
+                },
+            },
+            "required": ["description", "sources"],
+        }
+        try:
+            data, sources = self.client.generate_json_with_web_search(
+                model=model,
+                system_prompt=(
+                    "You research and write concise, factual biographies of musical artists for a personal music library. "
+                    "Use web search to identify the exact artist and verify concrete facts before writing."
+                ),
+                user_prompt=(
+                    "Search the web for the exact band or musical artist below before answering. Use the album, genre, and URL "
+                    "to disambiguate artists with similar names. Your search query should quote the artist name and include the "
+                    "known album or release title when provided. Prefer the artist's official site or Bandcamp, label pages, "
+                    "MusicBrainz, Discogs, AllMusic, and reputable music publications. Write one informative English paragraph "
+                    "of 60 to 90 words containing concrete facts such as origin, members, genre, career history, and "
+                    "notable releases when supported by sources. Do not infer style from a song or album title, and avoid vague "
+                    "filler such as 'mysterious', 'intriguing', 'possibly', or 'limited information'. Do not include changing "
+                    "statistics such as listener, follower, or play counts. Return clean prose in the description field without "
+                    "headings, markdown, URLs, or inline citations. In the sources field, return 2 to 5 web pages actually used, "
+                    "each with a concise title and canonical URL. Do not use Reddit, forums, or user-generated playlists as "
+                    "primary biographical sources.\n\n"
+                    + "\n\n".join(context_parts)
+                ),
+                schema_name="artist_description",
+                schema=schema,
+            )
+            description = str(data["description"]).strip()
+            if not description:
+                raise AIClientError("AI returned an empty artist description")
+            structured_source_list: list[dict[str, str]] = []
+            structured_sources = data.get("sources")
+            if isinstance(structured_sources, list):
+                for source in structured_sources:
+                    if not isinstance(source, dict):
+                        continue
+                    url = str(source.get("url") or "").strip()
+                    title = str(source.get("title") or url).strip()
+                    if url.startswith(("https://", "http://")):
+                        structured_source_list.append({"title": title, "url": url})
+            combined_sources = structured_source_list + list(sources)
+            seen_urls: set[str] = set()
+            self.last_artist_description_sources = []
+            for source in combined_sources:
+                if source["url"] in seen_urls:
+                    continue
+                seen_urls.add(source["url"])
+                self.last_artist_description_sources.append(source)
+                if len(self.last_artist_description_sources) >= 10:
+                    break
+            self._mark_success()
+            return description
+        except (OpenAIClientError, AIClientError) as exc:
+            self._mark_failure(str(exc))
+            raise
+        except Exception as exc:
+            self._mark_failure(str(exc))
+            raise
+
     def generate_album_writeup(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:
         if self.client is None:
             raise AIClientError("No AI client is configured")
+        self.last_album_writeup_sources = []
 
         page_excerpt = ""
         if album.album_external_url:
@@ -2388,6 +2564,8 @@ class AlbumWriteupGenerator:
             "🎶 Genre: Genre (always in English)\n\n"
             "📌 Description:\n"
             "A few paragraphs about the album — history, sound, reception, notable facts.\n\n"
+            "⭐ User ratings:\n"
+            "Source: score/scale (rating count when available)\n\n"
             "🎧 Listen:\n"
             f"{listen_line_example}"
         )
@@ -2399,6 +2577,8 @@ class AlbumWriteupGenerator:
             "🎶 Жанр: Genre (always in English, e.g. Progressive Metal)\n\n"
             "📌 Описание:\n"
             "Несколько абзацев об альбоме — история, звучание, reception, факты.\n\n"
+            "⭐ Пользовательские оценки:\n"
+            "Источник: оценка/шкала (количество оценок, если доступно)\n\n"
             "🎧 Слушать:\n"
             f"{listen_line_example}"
         )
@@ -2409,7 +2589,15 @@ class AlbumWriteupGenerator:
             f"{lang_instruction}\n"
             f"IMPORTANT: The genre value (after the 🎶 label) must always be written in English, "
             f"even when the write-up language is Russian.\n"
-            f"Use the provided metadata and source excerpts. Search your knowledge for additional facts about the band and album.\n"
+            f"Search the web for the exact album before writing, using the artist, album title, and year together to disambiguate it. "
+            f"Use the provided metadata and source excerpts as additional context. Prefer official artist or label pages, Bandcamp, "
+            f"MusicBrainz, Discogs, AllMusic, and reputable music publications.\n"
+            f"Research public user/community ratings on sources such as Rate Your Music, Album of the Year, Sputnikmusic, Metal Storm, "
+            f"or Metal Archives. When at least one verifiable user rating exists, include the User ratings section with each source's "
+            f"score, original scale, and rating/vote count when available. Do not convert scales, confuse critic scores with user scores, "
+            f"or invent missing numbers. Omit the entire User ratings section when no verifiable user rating is found. The sources field "
+            f"must include the exact page supporting every reported rating. Keep the overview text clean: do not put inline citations, "
+            f"source URLs, or citation markdown inside it because sources are displayed separately.\n"
             f"{listen_instruction}"
             f"Keep the write-up informative but concise (3–6 sentences in the description paragraph).\n\n"
             f"{format_example}\n\n"
@@ -2421,23 +2609,76 @@ class AlbumWriteupGenerator:
             "additionalProperties": False,
             "properties": {
                 "overview": {"type": "string"},
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "title": {"type": "string"},
+                            "url": {"type": "string"},
+                        },
+                        "required": ["title", "url"],
+                    },
+                },
             },
-            "required": ["overview"],
+            "required": ["overview", "sources"],
         }
 
         try:
-            data = self.client.generate_json(
+            request_kwargs = dict(
                 model=model,
                 system_prompt=(
                     "You are a music writer creating concise, factual album write-ups "
-                    "for Telegram posts and a personal music library app. Use only verified facts."
+                    "for Telegram posts and a personal music library app. Use web search and only verified facts."
                 ),
                 user_prompt=prompt,
                 schema_name="album_overview",
                 schema=schema,
             )
+            generate_with_search = getattr(self.client, "generate_json_with_web_search", None)
+            if callable(generate_with_search):
+                data, sources = generate_with_search(**request_kwargs)
+            else:
+                # Compatibility for injected/legacy clients; the production OpenAI client always uses web search.
+                data = self.client.generate_json(**request_kwargs)
+                sources = []
+            structured_source_list: list[dict[str, str]] = []
+            structured_sources = data.get("sources")
+            if isinstance(structured_sources, list):
+                for source in structured_sources:
+                    if not isinstance(source, dict):
+                        continue
+                    url = str(source.get("url") or "").strip()
+                    title = str(source.get("title") or url).strip()
+                    if url.startswith(("https://", "http://")):
+                        structured_source_list.append({"title": title, "url": url})
+            rating_domains = (
+                "albumoftheyear.org",
+                "rateyourmusic.com",
+                "sputnikmusic.com",
+                "metalstorm.net",
+                "metal-archives.com",
+            )
+            rating_sources = [source for source in sources if any(domain in source["url"] for domain in rating_domains)]
+            other_sources = [source for source in sources if source not in rating_sources]
+            combined_sources = structured_source_list + rating_sources + other_sources
+            seen_urls: set[str] = set()
+            for source in combined_sources:
+                if source["url"] in seen_urls:
+                    continue
+                seen_urls.add(source["url"])
+                self.last_album_writeup_sources.append(source)
+                if len(self.last_album_writeup_sources) >= 10:
+                    break
             self._mark_success()
-            return _ensure_spotify_writeup_link(str(data["overview"]), spotify_url)
+            clean_writeup = _strip_inline_web_citations(str(data["overview"]))
+            return _ensure_writeup_listen_links(
+                clean_writeup,
+                youtube_music_url=youtube_music_url,
+                spotify_url=spotify_url,
+                language=language,
+            )
         except (OpenAIClientError, AIClientError) as exc:
             self._mark_failure(str(exc))
             raise
@@ -2449,7 +2690,7 @@ class AlbumWriteupGenerator:
 class MetadataImporter:
     def __init__(
         self,
-        client: AlbumWriteupAIClient | GitHubModelsClient | RoutingWriteupClient | None,
+        client: AlbumWriteupAIClient | None,
         *,
         source_importer: SourceMetadataImporter | None = None,
         writeup_generator: AlbumWriteupGenerator | None = None,
@@ -2458,7 +2699,7 @@ class MetadataImporter:
         self.writeup_generator = writeup_generator or AlbumWriteupGenerator(client)
 
     @property
-    def client(self) -> AlbumWriteupAIClient | GitHubModelsClient | RoutingWriteupClient | None:
+    def client(self) -> AlbumWriteupAIClient | None:
         return self.writeup_generator.client
 
     @property
@@ -2468,6 +2709,14 @@ class MetadataImporter:
     @property
     def last_error(self) -> str | None:
         return self.writeup_generator.last_error
+
+    @property
+    def last_artist_description_sources(self) -> list[dict[str, str]]:
+        return self.writeup_generator.last_artist_description_sources
+
+    @property
+    def last_album_writeup_sources(self) -> list[dict[str, str]]:
+        return self.writeup_generator.last_album_writeup_sources
 
     @property
     def last_diagnostics(self) -> dict[str, Any]:
@@ -2481,6 +2730,25 @@ class MetadataImporter:
 
     def generate_album_overview(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:
         return self.writeup_generator.generate_album_overview(album, language=language, model=model)
+
+    def generate_artist_description(
+        self,
+        artist_name: str,
+        *,
+        origin: str | None,
+        album_title: str | None,
+        genre: str | None,
+        source_url: str | None,
+        model: str,
+    ) -> str:
+        return self.writeup_generator.generate_artist_description(
+            artist_name,
+            origin=origin,
+            album_title=album_title,
+            genre=genre,
+            source_url=source_url,
+            model=model,
+        )
 
     def generate_album_writeup(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:
         return self.writeup_generator.generate_album_writeup(album, language=language, model=model)

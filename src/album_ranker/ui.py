@@ -364,6 +364,45 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         letter-spacing: 0.12em;
         text-transform: uppercase;
       }}
+      .field-label-row {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }}
+      .field-label-row .form-label {{
+        margin: 0;
+      }}
+      .field-ai-button {{
+        padding: 6px 10px;
+        font-size: 11px;
+        line-height: 1.2;
+      }}
+      .textarea-clear-wrap {{
+        position: relative;
+      }}
+      .textarea-clear-wrap textarea {{
+        padding-right: 52px;
+      }}
+      .textarea-clear-button {{
+        position: absolute;
+        z-index: 1;
+        top: 10px;
+        right: 10px;
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        border-radius: 50%;
+        color: var(--muted);
+        font-size: 20px;
+        line-height: 1;
+      }}
+      .textarea-clear-button:hover {{
+        color: var(--ink);
+        border-color: var(--accent);
+      }}
       .row {{
         display: flex;
         gap: 10px;
@@ -1477,6 +1516,26 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         if (!contentType.includes("application/json")) return null;
         return response.json();
       }}
+      function showArtistDescriptionResult(target, status, result) {{
+        target.value = result?.description || "";
+        target.focus();
+        showResearchSources(status, "AI description ready for review.", result?.sources);
+      }}
+      function showResearchSources(status, message, rawSources) {{
+        status.replaceChildren(document.createTextNode(message));
+        const sources = Array.isArray(rawSources) ? rawSources : [];
+        if (!sources.length) return;
+        status.appendChild(document.createTextNode(" Sources: "));
+        sources.slice(0, 5).forEach((source, index) => {{
+          if (index) status.appendChild(document.createTextNode(", "));
+          const link = document.createElement("a");
+          link.href = source.url;
+          link.target = "_blank";
+          link.rel = "noreferrer";
+          link.textContent = source.title || new URL(source.url).hostname;
+          status.appendChild(link);
+        }});
+      }}
       document.querySelectorAll("[data-toggle-clamp]").forEach((button) => {{
         const target = document.getElementById(button.dataset.toggleClamp);
         if (!target) return;
@@ -1971,8 +2030,14 @@ def render_artists_page(
                 </div>
               </div>
               <div class="form-field">
-                <label class="form-label" for="artistConfirmDescription">Description</label>
-                <textarea id="artistConfirmDescription" name="description" placeholder="Description"></textarea>
+                <div class="field-label-row">
+                  <label class="form-label" for="artistConfirmDescription">Description</label>
+                  <button type="button" class="secondary field-ai-button" id="artistConfirmGenerateDescription">Generate with AI</button>
+                </div>
+                <div class="textarea-clear-wrap">
+                  <button type="button" class="secondary textarea-clear-button" id="artistConfirmClearDescription" aria-label="Clear description" title="Clear description">&times;</button>
+                  <textarea id="artistConfirmDescription" name="description" placeholder="Description"></textarea>
+                </div>
               </div>
               <div class="form-field">
                 <label class="form-label" for="artistConfirmPageUrl">Artist Page URL</label>
@@ -2048,6 +2113,31 @@ def render_artists_page(
         const artistFormStatus = document.getElementById("artistFormStatus");
         const artistImportStatus = document.getElementById("artistImportStatus");
         const artistToolsToggle = document.getElementById("artistToolsToggle");
+        async function generateArtistDescription({{ button, name, origin, sourceUrl, target, status }}) {{
+          const originalLabel = button.textContent;
+          try {{
+            validateRequired(name, "Artist name");
+            button.disabled = true;
+            button.textContent = "Generating...";
+            status.textContent = "Generating artist description with AI...";
+            const result = await fetchJson("/api/artist-description/draft", {{
+              method: "POST",
+              body: JSON.stringify({{
+                artist_name: name.trim(),
+                origin: origin.trim() || null,
+                album_title: null,
+                genre: null,
+                source_url: validateUrl(sourceUrl, "Artist page URL"),
+              }}),
+            }});
+            showArtistDescriptionResult(target, status, result);
+          }} catch (error) {{
+            status.textContent = error.message || "AI description generation failed.";
+          }} finally {{
+            button.disabled = false;
+            button.textContent = originalLabel;
+          }}
+        }}
         function syncArtistToolsToggle() {{
           if (!artistToolsToggle) return;
           const isOpen = !artistToolsPanel.classList.contains("hidden");
@@ -2128,6 +2218,21 @@ def render_artists_page(
           artistConfirmForm.reset();
           artistImportStatus.textContent = "";
           document.getElementById("artistDuplicateWarning").classList.add("hidden");
+        }});
+        document.getElementById("artistConfirmGenerateDescription").addEventListener("click", () => {{
+          generateArtistDescription({{
+            button: document.getElementById("artistConfirmGenerateDescription"),
+            name: artistConfirmForm.name.value,
+            origin: artistConfirmForm.origin.value,
+            sourceUrl: artistConfirmForm.external_url.value,
+            target: artistConfirmForm.description,
+            status: artistImportStatus,
+          }});
+        }});
+        document.getElementById("artistConfirmClearDescription").addEventListener("click", () => {{
+          artistConfirmForm.description.value = "";
+          artistConfirmForm.description.focus();
+          artistImportStatus.textContent = "Description cleared.";
         }});
         artistForm.addEventListener("submit", async (event) => {{
           event.preventDefault();
@@ -2313,6 +2418,9 @@ def render_artist_detail_page(
     artist: ArtistWithAlbumsRecord,
     imports: list[ImportDraftRecord],
 ) -> str:
+    description_context_album = next((album for album in artist.albums if album.title), None)
+    description_context_album_title = description_context_album.title if description_context_album else None
+    description_context_genre = description_context_album.genre if description_context_album else None
     albums_markup = "".join(
         _album_card_markup(album, show_artist=False, interactive_rating=True, show_bookmark_note=True) for album in artist.albums
     ) or '<p class="muted">No albums added yet.</p>'
@@ -2379,8 +2487,14 @@ def render_artist_detail_page(
             </div>
           </div>
           <div class="form-field">
-            <label class="form-label">Description</label>
-            <textarea name="description" id="artistRefreshDescription" rows="5" placeholder="Artist description"></textarea>
+            <div class="field-label-row">
+              <label class="form-label" for="artistRefreshDescription">Description</label>
+              <button type="button" class="secondary field-ai-button" id="artistRefreshGenerateDescription">Generate with AI</button>
+            </div>
+            <div class="textarea-clear-wrap">
+              <button type="button" class="secondary textarea-clear-button" id="artistRefreshClearDescription" aria-label="Clear description" title="Clear description">&times;</button>
+              <textarea name="description" id="artistRefreshDescription" rows="5" placeholder="Artist description"></textarea>
+            </div>
           </div>
           <div class="form-field">
             <label class="form-label">External URL</label>
@@ -2457,10 +2571,6 @@ def render_artist_detail_page(
             <input type="hidden" name="draft_id">
             <input type="hidden" name="artist_name" value="{_escape(artist.name)}">
             <input type="hidden" name="artist_description" value="{_escape(artist.description)}">
-            <div class="form-field">
-              <label class="form-label" for="artistAlbumConfirmArtistName">Artist</label>
-              <input id="artistAlbumConfirmArtistName" value="{_escape(artist.name)}" disabled>
-            </div>
             <div class="form-field">
               <label class="form-label" for="artistAlbumConfirmTitle">Album</label>
               <input id="artistAlbumConfirmTitle" name="title" placeholder="Album" required>
@@ -2710,6 +2820,38 @@ def render_artist_detail_page(
           }});
           const artistRefreshForm = document.getElementById("artistRefreshForm");
           if (artistRefreshForm) {{
+            document.getElementById("artistRefreshClearDescription").addEventListener("click", () => {{
+              artistRefreshForm.description.value = "";
+              artistRefreshForm.description.focus();
+              document.getElementById("artistRefreshApplyStatus").textContent = "Description cleared.";
+            }});
+            document.getElementById("artistRefreshGenerateDescription").addEventListener("click", async (event) => {{
+              const generateBtn = event.currentTarget;
+              const originalLabel = generateBtn.textContent;
+              const applyStatus = document.getElementById("artistRefreshApplyStatus");
+              try {{
+                validateRequired(artistRefreshForm.name.value, "Artist name");
+                generateBtn.disabled = true;
+                generateBtn.textContent = "Generating...";
+                applyStatus.textContent = "Generating artist description with AI...";
+                const result = await fetchJson("/api/artist-description/draft", {{
+                  method: "POST",
+                  body: JSON.stringify({{
+                    artist_name: artistRefreshForm.name.value.trim(),
+                    origin: artistRefreshForm.origin.value.trim() || null,
+                    album_title: {_json(description_context_album_title)},
+                    genre: {_json(description_context_genre)},
+                    source_url: validateUrl(artistRefreshForm.external_url.value, "External URL"),
+                  }}),
+                }});
+                showArtistDescriptionResult(artistRefreshForm.description, applyStatus, result);
+              }} catch (err) {{
+                applyStatus.textContent = err.message || "AI description generation failed.";
+              }} finally {{
+                generateBtn.disabled = false;
+                generateBtn.textContent = originalLabel;
+              }}
+            }});
             document.getElementById("artistRefreshReject").addEventListener("click", () => {{
               document.getElementById("artistRefreshReview").classList.add("hidden");
               status.textContent = '';
@@ -2995,8 +3137,14 @@ def render_imports_page(settings: SettingsRecord) -> str:
               <input id="bundleArtistOrigin" name="artist_origin" placeholder="Country, city or region" disabled>
             </div>
             <div class="form-field">
-              <label class="form-label" for="bundleArtistDescription">Description</label>
-              <textarea id="bundleArtistDescription" name="artist_description" placeholder="Description" disabled></textarea>
+              <div class="field-label-row">
+                <label class="form-label" for="bundleArtistDescription">Description</label>
+                <button type="button" class="secondary field-ai-button" id="bundleArtistGenerateDescription" disabled>Generate with AI</button>
+              </div>
+              <div class="textarea-clear-wrap">
+                <button type="button" class="secondary textarea-clear-button" id="bundleArtistClearDescription" aria-label="Clear description" title="Clear description" disabled>&times;</button>
+                <textarea id="bundleArtistDescription" name="artist_description" placeholder="Description" disabled></textarea>
+              </div>
             </div>
             <div class="form-field">
               <label class="form-label" for="bundleArtistExternalUrl">Artist Page URL</label>
@@ -3087,7 +3235,40 @@ def render_imports_page(settings: SettingsRecord) -> str:
             if (!enabled) el.value = "";
           });
           document.getElementById("bundleArtistName").required = enabled;
+          document.getElementById("bundleArtistGenerateDescription").disabled = !enabled;
+          document.getElementById("bundleArtistClearDescription").disabled = !enabled;
         }
+        document.getElementById("bundleArtistGenerateDescription").addEventListener("click", async (event) => {
+          const button = event.currentTarget;
+          const originalLabel = button.textContent;
+          button.disabled = true;
+          button.textContent = "Generating...";
+          confirmStatus.textContent = "Generating artist description with AI...";
+          try {
+            validateRequired(value("bundleArtistName"), "Artist name");
+            const result = await fetchJson("/api/artist-description/draft", {
+              method: "POST",
+              body: JSON.stringify({
+                artist_name: value("bundleArtistName"),
+                origin: value("bundleArtistOrigin") || null,
+                album_title: value("bundleAlbumTitle") || null,
+                genre: value("bundleAlbumGenre") || null,
+                source_url: validateUrl(value("bundleArtistExternalUrl"), "Artist page URL"),
+              }),
+            });
+            showArtistDescriptionResult(document.getElementById("bundleArtistDescription"), confirmStatus, result);
+          } catch (error) {
+            confirmStatus.textContent = error.message || "AI description generation failed.";
+          } finally {
+            button.disabled = false;
+            button.textContent = originalLabel;
+          }
+        });
+        document.getElementById("bundleArtistClearDescription").addEventListener("click", () => {
+          setValue("bundleArtistDescription", "");
+          document.getElementById("bundleArtistDescription").focus();
+          confirmStatus.textContent = "Description cleared.";
+        });
         document.querySelectorAll(".input-clear-wrap").forEach((wrap) => {
           const input = wrap.querySelector("input");
           const btn = wrap.querySelector(".input-clear-btn");
@@ -4073,7 +4254,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               }});
               draftText.value = resp.writeup || '';
               resetGenerateUI();
-              statusEl.textContent = 'Draft ready \u2014 review below.';
+              showResearchSources(statusEl, 'Draft ready \u2014 review below.', resp.sources);
               draftPanel.classList.remove('hidden');
               draftPanel.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
             }} catch (err) {{
@@ -4606,24 +4787,17 @@ def render_settings_page(settings: SettingsRecord) -> str:
             </label>"""
         for t_val, t_label, t_desc in _themes
     )
-    provider_options = "".join(
-        f'<option value="{v}"{" selected" if v == settings.ai_provider else ""}>{label}</option>'
-        for v, label in [("openai", "OpenAI API"), ("github", "GitHub Models (Copilot)")]
-    )
-    models_by_provider_json = _json(settings.available_models_by_provider)
     body = f"""
       <section class="hero compact">
         <div class="eyebrow">Settings</div>
         <h1>Keep write-up generation optional and visible</h1>
-        <p>Choose the AI provider and model used only for album write-ups and Telegram post drafts, and pick a colour theme for the interface.</p>
+        <p>Choose the OpenAI model used for artist descriptions, album write-ups, and Telegram post drafts, and pick a colour theme for the interface.</p>
       </section>
       <section class="grid two">
         <section class="panel">
           <div class="panel-title">Write-up Model</div>
           <form id="settingsForm">
-            <label style="display:block;margin-bottom:4px;font-size:0.85em;color:var(--muted);">AI Provider</label>
-            <select name="ai_provider" id="providerSelect">{provider_options}</select>
-            <label style="display:block;margin-top:12px;margin-bottom:4px;font-size:0.85em;color:var(--muted);">Model</label>
+            <label style="display:block;margin-bottom:4px;font-size:0.85em;color:var(--muted);">OpenAI model</label>
             <select name="writeup_model" id="writeupModelSelect">{options}</select>
             <div class="panel-title" style="margin-top:20px;">Theme</div>
             <div class="theme-picker">{theme_options}</div>
@@ -4635,9 +4809,8 @@ def render_settings_page(settings: SettingsRecord) -> str:
         </section>
         <section class="panel">
           <div class="panel-title">Runtime</div>
-          <p class="muted">AI provider: <strong>{_escape(settings.ai_provider.replace("github", "GitHub Models").replace("openai", "OpenAI API"))}</strong></p>
+          <p class="muted">AI provider: <strong>OpenAI API</strong></p>
           <p class="muted">OpenAI key: <strong>{'configured' if settings.openai_api_key_configured else 'missing'}</strong></p>
-          <p class="muted">GitHub Models token: <strong>{'configured' if settings.github_token_configured else 'missing'}</strong></p>
           <p class="muted">Write-up generation status: <strong>{_escape(settings.ai_status.replace("_", " "))}</strong></p>
           {f'<p class="muted">{_escape(settings.ai_status_detail)}</p>' if settings.ai_status_detail else ''}
           <p class="muted">Server: {_escape(settings.host)}:{settings.port}</p>
@@ -4691,14 +4864,7 @@ def render_settings_page(settings: SettingsRecord) -> str:
             document.documentElement.setAttribute("data-theme", el.dataset.themeValue);
           }});
         }});
-        const modelsByProvider = {models_by_provider_json};
-        const providerSelect = document.getElementById("providerSelect");
         const writeupModelSelect = document.getElementById("writeupModelSelect");
-        providerSelect.addEventListener("change", (e) => {{
-          const provider = e.target.value;
-          const models = modelsByProvider[provider] || [];
-          writeupModelSelect.innerHTML = models.map((m) => `<option value="${{m}}">${{m}}</option>`).join("") || '<option value="">No models available</option>';
-        }});
         document.getElementById("settingsForm").addEventListener("submit", async (event) => {{
           event.preventDefault();
           const form = event.currentTarget;
@@ -4712,7 +4878,7 @@ def render_settings_page(settings: SettingsRecord) -> str:
               body: JSON.stringify({{
                 writeup_model: writeupModelSelect.value,
                 theme: selectedTheme,
-                ai_provider: providerSelect.value,
+                ai_provider: "openai",
               }}),
             }});
             status.textContent = "Settings saved.";

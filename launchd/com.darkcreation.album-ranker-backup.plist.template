@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.darkcreation.album-ranker-backup</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__RUNTIME_ROOT__/venv/bin/python</string>
+    <string>-m</string>
+    <string>album_ranker.backup</string>
+    <string>--backup-dir</string>
+    <string>__BACKUP_DIR__</string>
+    <string>--retention-days</string>
+    <string>30</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONPATH</key>
+    <string>__RUNTIME_ROOT__/app</string>
+    <key>ALBUM_RANKER_DB_PATH</key>
+    <string>__RUNTIME_ROOT__/Data/album-ranker.db</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>__RUNTIME_ROOT__</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/backup.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/backup.log</string>
+</dict>
+</plist>

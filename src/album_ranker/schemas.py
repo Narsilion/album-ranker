@@ -320,6 +320,34 @@ class ImportRequest(BaseModel):
     artist_source_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
 
 
+class ArtistDescriptionDraftRequest(BaseModel):
+    artist_name: str = Field(max_length=SHORT_TEXT_MAX)
+    origin: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
+    album_title: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
+    genre: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
+    source_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
+
+    @field_validator("artist_name")
+    @classmethod
+    def artist_name_required(cls, value: str) -> str:
+        return _require_text(value, "Artist name")
+
+    @field_validator("origin", "album_title", "genre", "source_url", mode="before")
+    @classmethod
+    def strip_optional_text(cls, value: Any) -> Any:
+        return _strip_text(value)
+
+
+class ArtistDescriptionSource(BaseModel):
+    title: str
+    url: str = Field(max_length=URL_TEXT_MAX)
+
+
+class ArtistDescriptionDraftResponse(BaseModel):
+    description: str
+    sources: list[ArtistDescriptionSource] = Field(default_factory=list)
+
+
 class RefreshAlbumRequest(BaseModel):
     source_url: str | None = Field(default=None, max_length=URL_TEXT_MAX)
 
@@ -424,6 +452,7 @@ class WriteupDraftRequest(BaseModel):
 
 class WriteupDraftResponse(BaseModel):
     writeup: str = Field(max_length=LONG_TEXT_MAX)
+    sources: list[ArtistDescriptionSource] = Field(default_factory=list)
 
 
 class WriteupSaveRequest(BaseModel):
@@ -437,6 +466,7 @@ class OverviewDraftRequest(WriteupDraftRequest):
 
 class OverviewDraftResponse(BaseModel):
     overview: str = Field(max_length=LONG_TEXT_MAX)
+    sources: list[ArtistDescriptionSource] = Field(default_factory=list)
 
 
 class OverviewSaveRequest(BaseModel):

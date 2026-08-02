@@ -272,6 +272,25 @@ class SparseAlbumImporter(MetadataImporter):
         return self.generate_album_writeup(album, language=language, model=model)
 
 
+class NoGenreAlbumImporter(MetadataImporter):
+    def __init__(self) -> None:
+        super().__init__(client=None)
+
+    def create_album_draft(self, request, *, model):  # type: ignore[override]
+        return AlbumDraftData(
+            artist_name=request.artist_name,
+            album_title=request.album_title or "Imported Album",
+            album_external_url=request.source_url,
+            release_year=2024,
+            genre=None,
+        )
+
+
+class WithGenreAlbumImporter(NoGenreAlbumImporter):
+    def create_album_draft(self, request, *, model):  # type: ignore[override]
+        return super().create_album_draft(request, model=model).model_copy(update={"genre": "Imported Genre"})
+
+
 def test_manual_album_create_and_render_pages(client) -> None:
     genre_response = client.post("/api/genres", json={"name": "Black Metal"})
     assert genre_response.status_code == 200
@@ -339,9 +358,17 @@ def test_manual_album_create_and_render_pages(client) -> None:
     assert "Album Details" not in artists_page.text
     assert f'href="/artists/{artist_id}"' in artists_page.text
     assert "Album Import" in artist_detail_page.text
+    assert 'id="artistRefreshGenerateDescription"' in artist_detail_page.text
+    assert 'class="secondary textarea-clear-button" id="artistRefreshClearDescription"' in artist_detail_page.text
+    assert 'artistRefreshForm.description.value = ""' in artist_detail_page.text
+    assert 'fetchJson("/api/artist-description/draft"' in artist_detail_page.text
+    assert 'album_title: "Till Life Do Us Part - EP"' in artist_detail_page.text
+    assert 'genre: "Black Metal"' in artist_detail_page.text
     assert ".aa-tab.active" in artist_detail_page.text
     assert 'id="aa-tab-button-import" class="aa-tab secondary active"' in artist_detail_page.text
     assert 'id="aa-tab-button-manual" class="aa-tab secondary"' in artist_detail_page.text
+    assert 'id="artistAlbumConfirmArtistName"' not in artist_detail_page.text
+    assert f'<input type="hidden" name="artist_name" value="Scythe of Mephisto">' in artist_detail_page.text
     assert "Please provide an album page URL from Metal Archives, Alterportal" in artist_detail_page.text
     assert "Use an album page URL from Alterportal, Metal Archives" in artist_detail_page.text
     assert re.search(
@@ -448,6 +475,58 @@ def test_artist_page_album_import_rejects_metal_archives_artist_url(client) -> N
     assert response.status_code == 400
     assert "Metal Archives album URL" in response.text
     assert "/albums/" in response.text
+
+
+def test_album_import_without_genre_uses_closest_earlier_artist_album(settings) -> None:
+    app = create_app(
+        settings,
+        importer=NoGenreAlbumImporter(),
+        cover_downloader=CoverDownloader(settings.cover_dir),
+    )
+    local_client = TestClient(app)
+    _create_album(local_client, artist_name="Band", title="Older", release_year=2020, description="Older")
+    later = local_client.post(
+        "/api/albums",
+        json={
+            "artist_name": "Band",
+            "artist_description": "Later",
+            "title": "Later",
+            "release_year": 2025,
+            "genre": "Later Genre",
+            "duration_seconds": 1800,
+            "cover_image_path": None,
+            "cover_source_url": None,
+            "notes": None,
+            "tracks": [],
+        },
+    )
+    assert later.status_code == 200
+
+    response = local_client.post(
+        "/api/import/album",
+        json={"artist_name": "Band", "album_title": "New", "source_url": "https://music.youtube.com/playlist?list=abc"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["draft"]["draft_payload"]["genre"] == "Black Metal"
+
+
+def test_album_import_keeps_imported_genre_when_available(settings) -> None:
+    app = create_app(
+        settings,
+        importer=WithGenreAlbumImporter(),
+        cover_downloader=CoverDownloader(settings.cover_dir),
+    )
+    local_client = TestClient(app)
+    _create_album(local_client, artist_name="Band", title="Older", release_year=2020)
+
+    response = local_client.post(
+        "/api/import/album",
+        json={"artist_name": "Band", "album_title": "New", "source_url": "https://music.youtube.com/playlist?list=abc"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["draft"]["draft_payload"]["genre"] == "Imported Genre"
 
 
 def test_import_routes_do_not_call_ai_for_metadata(settings, monkeypatch) -> None:
@@ -648,7 +727,13 @@ def test_writeup_draft_calls_ai_generator(settings) -> None:
     response = local_client.post(f"/api/albums/{album['id']}/write-up/draft", json={"language": "en"})
 
     assert response.status_code == 200
-    assert response.json()["writeup"] == "Generated write-up for Green Carnation."
+    assert response.json()["writeup"] == (
+        "Generated write-up for Green Carnation.\n\n"
+        "🎧 Listen:\n"
+        "YouTube Music | "
+        "[Spotify](https://open.spotify.com/search/album%3A%22A%20Dark%20Poem%22%20"
+        "artist%3A%22Green%20Carnation%22/albums)"
+    )
     assert ai_client.calls == 1
 
 
@@ -909,20 +994,60 @@ def test_settings_update_accepts_active_model_for_compatibility(client) -> None:
     assert settings_response.json()["writeup_model"] == "gpt-5.4-mini"
 
 
-def test_settings_page_switches_to_github_provider(settings) -> None:
-    configured_settings = replace(
-        settings,
-        github_models_token="test-token",
-        github_models=["openai/gpt-4.1", "openai/gpt-4o"],
-    )
+def test_artist_description_draft_uses_model_selected_in_settings(settings) -> None:
+    class TrackingImporter(MetadataImporter):
+        def __init__(self) -> None:
+            super().__init__(client=None)
+            self.request = None
+
+        def generate_artist_description(  # type: ignore[override]
+            self, artist_name, *, origin, album_title, genre, source_url, model
+        ):
+            self.request = {
+                "artist_name": artist_name,
+                "origin": origin,
+                "album_title": album_title,
+                "genre": genre,
+                "source_url": source_url,
+                "model": model,
+            }
+            return "A generated artist description."
+
+    tracking_importer = TrackingImporter()
     app = create_app(
-        configured_settings,
-        importer=MetadataImporter(client=None),
-        cover_downloader=CoverDownloader(configured_settings.cover_dir),
+        settings,
+        importer=tracking_importer,
+        cover_downloader=CoverDownloader(settings.cover_dir),
     )
     local_client = TestClient(app)
+    settings_response = local_client.put("/api/settings", json={"writeup_model": "gpt-5.4-mini"})
 
-    settings_response = local_client.put(
+    response = local_client.post(
+        "/api/artist-description/draft",
+        json={
+            "artist_name": "The Haunted Youth",
+            "origin": "Belgium",
+            "album_title": "Boys Cry Too",
+            "genre": "Dream Pop",
+            "source_url": "https://music.youtube.com/playlist?list=test",
+        },
+    )
+
+    assert settings_response.status_code == 200
+    assert response.status_code == 200
+    assert response.json() == {"description": "A generated artist description.", "sources": []}
+    assert tracking_importer.request == {
+        "artist_name": "The Haunted Youth",
+        "origin": "Belgium",
+        "album_title": "Boys Cry Too",
+        "genre": "Dream Pop",
+        "source_url": "https://music.youtube.com/playlist?list=test",
+        "model": "gpt-5.4-mini",
+    }
+
+
+def test_settings_page_is_openai_only_and_rejects_retired_github_provider(client) -> None:
+    settings_response = client.put(
         "/api/settings",
         json={
             "ai_provider": "github",
@@ -930,17 +1055,13 @@ def test_settings_page_switches_to_github_provider(settings) -> None:
             "theme": "dark-green",
         },
     )
-    settings_page = local_client.get("/settings")
+    settings_page = client.get("/settings")
 
-    assert settings_response.status_code == 200
-    assert settings_response.json()["ai_provider"] == "github"
-    assert settings_response.json()["writeup_model"] == "openai/gpt-4o"
-    assert settings_response.json()["available_models"] == ["openai/gpt-4.1", "openai/gpt-4o"]
-    assert settings_response.json()["theme"] == "dark-green"
-    assert '<option value="github" selected>' in settings_page.text
-    assert '<option value="openai/gpt-4o" selected>' in settings_page.text
-    assert "pageState.settings.available_models_by_provider" not in settings_page.text
-    assert 'const modelsByProvider = {"openai":' in settings_page.text
+    assert settings_response.status_code == 400
+    assert settings_response.json()["detail"] == "GitHub Models has been retired. Use the OpenAI API provider."
+    assert "GitHub Models" not in settings_page.text
+    assert 'id="providerSelect"' not in settings_page.text
+    assert '<option value="gpt-5.6-terra">' in settings_page.text
 
 
 def test_patch_album_rating(client) -> None:
@@ -2390,9 +2511,26 @@ def test_imports_page_renders_bundle_flow(client) -> None:
     assert "setArtistDraftEnabled(Boolean(artistDraft))" in page.text
     assert 'id="albumWithArtistArtistSourceUrl" name="artist_source_url"' in page.text
     assert 'value("bundleArtistDraftId")' in page.text
+    assert 'id="bundleArtistGenerateDescription"' in page.text
+    assert 'class="secondary textarea-clear-button" id="bundleArtistClearDescription"' in page.text
+    assert 'setValue("bundleArtistDescription", "")' in page.text
+    assert 'album_title: value("bundleAlbumTitle") || null' in page.text
+    assert 'genre: value("bundleAlbumGenre") || null' in page.text
+    assert 'fetchJson("/api/artist-description/draft"' in page.text
     assert "Please provide an album page URL from Metal Archives, Alterportal" in page.text
     assert "Use the album page URL" in page.text
     assert "/api/import/album-with-artist" in page.text
+
+
+def test_artist_import_review_renders_ai_description_action(client) -> None:
+    page = client.get("/artists")
+
+    assert page.status_code == 200
+    assert 'id="artistConfirmGenerateDescription"' in page.text
+    assert 'class="secondary textarea-clear-button" id="artistConfirmClearDescription"' in page.text
+    assert 'artistConfirmForm.description.value = ""' in page.text
+    assert "Generate with AI" in page.text
+    assert 'fetchJson("/api/artist-description/draft"' in page.text
 
 
 # ── album refresh via import draft ───────────────────────────────────────────

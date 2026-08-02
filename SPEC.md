@@ -540,7 +540,7 @@ All configuration is via environment variables:
 | `ALBUM_RANKER_DB_PATH` | `./.data/album-ranker.db` | Path to the SQLite database |
 | `ALBUM_RANKER_HOST` | `127.0.0.1` | Bind host for Uvicorn |
 | `ALBUM_RANKER_PORT` | `8780` | Bind port for Uvicorn |
-| `ALBUM_RANKER_MODEL` | `gpt-4o` | Default OpenAI model (used as fallback when `app_settings.active_model` is unset) |
+| `ALBUM_RANKER_MODEL` | `gpt-5.6-terra` | Default OpenAI model for balanced-quality album write-ups (used as fallback when `app_settings.active_model` is unset) |
 | `OPENAI_API_KEY` | _(unset)_ | Enables AI enrichment and write-up generation; import works without it (metadata-only fallback) |
 
 The active model and UI theme can also be changed at runtime via the Settings page (persisted to `app_settings` keys `active_model` and `theme`). Valid theme values: `dark`, `dark-brown`, `dark-green`.

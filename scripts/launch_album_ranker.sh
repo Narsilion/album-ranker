@@ -2,15 +2,14 @@
 
 set -e
 
-PROJECT_DIR="/Users/darkcreation/Documents/git_repos/album-ranker"
-PYTHON_BIN="/usr/local/bin/python3"
 APP_URL="http://127.0.0.1:8780"
 HEALTH_URL="${APP_URL}/api/health"
-DATA_DIR="${PROJECT_DIR}/.data"
-LAUNCHER_LOG="${DATA_DIR}/launcher.log"
-SERVER_LOG="${DATA_DIR}/server.log"
+SERVICE_LABEL="com.darkcreation.album-ranker"
+DOMAIN="gui/$(id -u)"
+LOG_DIR="${HOME}/Library/Logs/Album Ranker"
+LAUNCHER_LOG="${LOG_DIR}/launcher.log"
 
-mkdir -p "${DATA_DIR}"
+mkdir -p "${LOG_DIR}"
 exec >> "${LAUNCHER_LOG}" 2>&1
 
 log() {
@@ -38,15 +37,6 @@ wait_for_health() {
 
 log "Launcher invoked"
 
-if [[ -f "${HOME}/.zshrc" ]]; then
-  log "Sourcing ${HOME}/.zshrc"
-  set +e
-  source "${HOME}/.zshrc"
-  set -e
-fi
-
-cd "${PROJECT_DIR}"
-
 if health_ok; then
   log "Server already running"
   log "Opening ${APP_URL}"
@@ -54,19 +44,18 @@ if health_ok; then
   exit 0
 fi
 
-if [[ ! -x ".venv/bin/album-ranker" ]]; then
-  log "Creating/updating project virtual environment"
-  notify "Preparing the local app environment. This can take a minute on first launch."
-  "${PYTHON_BIN}" -m venv .venv
-  .venv/bin/python -m pip install -e .
+if ! launchctl print "${DOMAIN}/${SERVICE_LABEL}" >/dev/null 2>&1; then
+  log "Service is not installed"
+  notify "Album Ranker service is not installed. Run scripts/install_album_ranker_service.sh."
+  exit 1
 fi
 
-log "Starting Album Ranker server"
+log "Starting Album Ranker launchd service"
 notify "Starting local server..."
-nohup env PYTHONPATH="${PROJECT_DIR}/src" .venv/bin/python -m album_ranker.main > "${SERVER_LOG}" 2>&1 &
+launchctl kickstart -k "${DOMAIN}/${SERVICE_LABEL}"
 if ! wait_for_health; then
-  log "Server did not become healthy; see ${SERVER_LOG}"
-  notify "Could not start. Check .data/server.log."
+  log "Server did not become healthy; see ${LOG_DIR}/server.log"
+  notify "Could not start. Check ~/Library/Logs/Album Ranker/server.log."
   exit 1
 fi
 

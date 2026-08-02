@@ -56,8 +56,104 @@ def test_album_writeup_ai_client_sends_json_schema_request(monkeypatch) -> None:
     assert request.full_url == openai_client.OPENAI_API_URL
     assert request.get_header("Authorization") == "Bearer openai-token"
     assert body["model"] == "gpt-5-mini"
+    assert "reasoning_effort" not in body
     assert body["response_format"]["type"] == "json_schema"
     assert body["response_format"]["json_schema"]["name"] == "album_writeup"
+
+
+def test_album_writeup_ai_client_uses_medium_reasoning_for_gpt_5_6(monkeypatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+        captured["request"] = request
+        return FakeResponse({"choices": [{"message": {"content": '{"overview":"Wyrd"}'}}]})
+
+    monkeypatch.setattr(openai_client, "urlopen", fake_urlopen)
+
+    AlbumWriteupAIClient("openai-token").generate_json(
+        model="gpt-5.6-sol",
+        system_prompt="System",
+        user_prompt="User",
+        schema_name="album_writeup",
+        schema={"type": "object", "properties": {"overview": {"type": "string"}}, "required": ["overview"]},
+    )
+
+    body = json.loads(captured["request"].data.decode("utf-8"))
+    assert body["reasoning_effort"] == "medium"
+
+
+def test_ai_client_uses_responses_web_search_and_returns_sources(monkeypatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return FakeResponse(
+            {
+                "output": [
+                    {
+                        "type": "web_search_call",
+                        "action": {
+                            "type": "search",
+                            "sources": [
+                                {"type": "url", "title": "Bandcamp", "url": "https://artist.bandcamp.com"}
+                            ],
+                        },
+                    },
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": '{"description":"A researched description."}',
+                                "annotations": [
+                                    {
+                                        "type": "url_citation",
+                                        "title": "Bandcamp",
+                                        "url": "https://artist.bandcamp.com",
+                                    },
+                                    {
+                                        "type": "url_citation",
+                                        "title": "Label",
+                                        "url": "https://label.example/artist",
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                ]
+            }
+        )
+
+    monkeypatch.setattr(openai_client, "urlopen", fake_urlopen)
+
+    result, sources = AlbumWriteupAIClient("openai-token").generate_json_with_web_search(
+        model="gpt-5.6-terra",
+        system_prompt="Research the artist.",
+        user_prompt="Ha Vay",
+        schema_name="artist_description",
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"description": {"type": "string"}},
+            "required": ["description"],
+        },
+    )
+
+    request = captured["request"]
+    body = json.loads(request.data.decode("utf-8"))
+    assert request.full_url == openai_client.OPENAI_RESPONSES_API_URL
+    assert captured["timeout"] == 120
+    assert body["tools"] == [{"type": "web_search", "search_context_size": "medium"}]
+    assert body["tool_choice"] == "required"
+    assert body["include"] == ["web_search_call.action.sources"]
+    assert body["text"]["format"]["name"] == "artist_description"
+    assert body["reasoning"] == {"effort": "medium"}
+    assert result == {"description": "A researched description."}
+    assert sources == [
+        {"title": "Bandcamp", "url": "https://artist.bandcamp.com"},
+        {"title": "Label", "url": "https://label.example/artist"},
+    ]
 
 
 def test_album_writeup_ai_client_requires_api_key() -> None:
@@ -88,6 +184,9 @@ def test_album_writeup_ai_client_lists_text_generation_models(monkeypatch) -> No
                     {"id": "gpt-4.1-mini"},
                     {"id": "text-embedding-3-small"},
                     {"id": "whisper-1"},
+                    {"id": "gpt-realtime"},
+                    {"id": "gpt-5.3-codex"},
+                    {"id": "gpt-image-1"},
                     {"id": "o3-mini"},
                 ]
             }

@@ -295,7 +295,7 @@ class Database:
         self.set_app_setting("active_model", selected_model)
         self.set_app_setting("theme", payload.theme)
         if payload.ai_provider is not None:
-            allowed_providers = {"openai", "github"}
+            allowed_providers = {"openai"}
             if payload.ai_provider not in allowed_providers:
                 raise ValueError("Invalid AI provider value.")
             self.set_app_setting("active_ai_provider", payload.ai_provider)
@@ -555,6 +555,39 @@ class Database:
         if row is None:
             return None
         return self.get_album(int(row["id"]))
+
+    def closest_album_genre_for_artist(self, artist_name: str, release_year: int | None) -> str | None:
+        if release_year is None:
+            order_clause = """
+                ORDER BY albums.release_year IS NULL ASC,
+                         albums.release_year DESC,
+                         albums.id DESC
+            """
+            params: tuple[object, ...] = (artist_name,)
+        else:
+            order_clause = """
+                ORDER BY albums.release_year IS NULL ASC,
+                         CASE WHEN albums.release_year <= ? THEN 0 ELSE 1 END ASC,
+                         ABS(albums.release_year - ?) ASC,
+                         albums.release_year DESC,
+                         albums.id DESC
+            """
+            params = (artist_name, release_year, release_year)
+        with self.connection() as connection:
+            row = connection.execute(
+                f"""
+                SELECT albums.genre
+                FROM albums
+                JOIN artists ON artists.id = albums.artist_id
+                WHERE lower(artists.name) = lower(?)
+                  AND albums.genre IS NOT NULL
+                  AND trim(albums.genre) != ''
+                {order_clause}
+                LIMIT 1
+                """,
+                params,
+            ).fetchone()
+        return None if row is None else str(row["genre"])
 
     def create_album(self, payload: AlbumUpsert) -> AlbumDetailRecord:
         artist_id = self._get_or_create_artist(payload)

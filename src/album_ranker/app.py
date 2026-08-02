@@ -21,7 +21,7 @@ from album_ranker.importer import (
     metal_archives_artist_url_from_album_url,
     wikipedia_artist_url_from_name,
 )
-from album_ranker.openai_client import AlbumWriteupAIClient, GitHubModelsClient, RoutingWriteupClient
+from album_ranker.openai_client import AlbumWriteupAIClient
 from album_ranker.schemas import (
     AlbumBookmarkPatch,
     AlbumBookmarkNotePatch,
@@ -38,6 +38,8 @@ from album_ranker.schemas import (
     GenreRecord,
     GenreUpsert,
     ArtistRecord,
+    ArtistDescriptionDraftRequest,
+    ArtistDescriptionDraftResponse,
     ArtistUpsert,
     HealthResponse,
     ImportConfirmRequest,
@@ -204,6 +206,9 @@ def create_app(
     cover_downloader: CoverDownloader | None = None,
 ) -> FastAPI:
     available_models = [
+        "gpt-5.6-terra",
+        "gpt-5.6-sol",
+        "gpt-5.6-luna",
         "gpt-4.1-nano",
         "gpt-4.1-mini",
         "gpt-4.1",
@@ -221,29 +226,16 @@ def create_app(
     ]
     if settings.model not in available_models:
         available_models.insert(0, settings.model)
-    github_models = list(dict.fromkeys(settings.github_models or ["openai/gpt-4.1"]))
-    available_models_by_provider = {
-        "openai": available_models,
-        "github": github_models,
-    }
+    available_models_by_provider = {"openai": available_models}
     db = Database(settings.db_path)
     db.initialize()
-    db.set_app_setting("active_model", db.get_active_model(settings.model))
-    if db.get_app_setting("active_ai_provider") is None:
-        db.set_app_setting("active_ai_provider", settings.ai_provider)
-    openai_ai_client = AlbumWriteupAIClient(settings.openai_api_key)
-    github_ai_client = GitHubModelsClient(settings.github_models_token)
-
-    def active_ai_provider() -> str:
-        stored = db.get_active_ai_provider(settings.ai_provider)
-        return stored if stored in available_models_by_provider else settings.ai_provider
-
-    routing_client = RoutingWriteupClient(
-        active_provider=active_ai_provider,
-        openai_client=openai_ai_client,
-        github_client=github_ai_client,
-    )
-    importer = importer or MetadataImporter(routing_client)
+    stored_provider = db.get_active_ai_provider(settings.ai_provider)
+    active_model = db.get_active_model(settings.model)
+    if stored_provider != "openai" or "/" in active_model:
+        active_model = settings.model
+    db.set_app_setting("active_model", active_model)
+    db.set_app_setting("active_ai_provider", "openai")
+    importer = importer or MetadataImporter(AlbumWriteupAIClient(settings.openai_api_key))
     cover_downloader = cover_downloader or CoverDownloader(settings.cover_dir)
 
     app = FastAPI(title="Album Ranker")
@@ -272,24 +264,17 @@ def create_app(
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
     def writeup_generation_status() -> tuple[str, str | None]:
-        provider = active_ai_provider()
-        if provider == "github":
-            if not settings.github_models_token:
-                return "key_missing", "GITHUB_MODELS_TOKEN is not configured."
-        else:
-            if not settings.openai_api_key:
-                return "key_missing", "OPENAI_API_KEY is not configured."
+        if not settings.openai_api_key:
+            return "key_missing", "OPENAI_API_KEY is not configured."
         if importer.last_request_failed:
             return "last_request_failed", importer.last_error
         return "ready", None
 
     def build_settings() -> SettingsRecord:
-        provider = active_ai_provider()
-        models = available_models_by_provider.get(provider, available_models)
         writeup_status, writeup_status_detail = writeup_generation_status()
         return db.build_settings_record(
             default_model=settings.model,
-            available_models=models,
+            available_models=available_models,
             available_models_by_provider=dict(available_models_by_provider),
             host=settings.host,
             port=settings.port,
@@ -297,8 +282,8 @@ def create_app(
             ai_status=writeup_status,
             ai_status_detail=writeup_status_detail,
             last_import_diagnostics=importer.last_diagnostics or None,
-            ai_provider=provider,
-            github_token_configured=bool(settings.github_models_token),
+            ai_provider="openai",
+            github_token_configured=False,
         )
 
     @app.get("/", response_class=HTMLResponse)
@@ -370,9 +355,12 @@ def create_app(
     @app.put("/api/settings", response_model=SettingsRecord)
     async def update_settings(payload: SettingsUpdateRequest) -> SettingsRecord:
         selected_model = payload.selected_model
-        target_provider = payload.ai_provider or active_ai_provider()
-        all_allowed = available_models_by_provider.get(target_provider, available_models)
-        if selected_model not in all_allowed:
+        if payload.ai_provider not in (None, "openai"):
+            raise HTTPException(
+                status_code=400,
+                detail="GitHub Models has been retired. Use the OpenAI API provider.",
+            )
+        if selected_model not in available_models:
             raise HTTPException(status_code=400, detail="That model is not in the available model list. Pick one from the menu.")
         try:
             db.update_settings(payload)
@@ -593,7 +581,7 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"ok": True}
 
-    def _generate_album_writeup(album_id: int, language: str) -> str:
+    def _generate_album_writeup(album_id: int, language: str) -> tuple[str, list[dict[str, str]]]:
         try:
             album = db.get_album(album_id)
         except KeyError as exc:
@@ -607,15 +595,17 @@ def create_app(
         except Exception as exc:
             detail = _friendly_ai_error(exc, action="write-up")
             raise HTTPException(status_code=502, detail=detail) from exc
-        return writeup
+        return writeup, importer.last_album_writeup_sources
 
     @app.post("/api/albums/{album_id}/write-up/draft", response_model=WriteupDraftResponse)
     async def generate_album_writeup(album_id: int, payload: WriteupDraftRequest) -> WriteupDraftResponse:
-        return WriteupDraftResponse(writeup=_generate_album_writeup(album_id, payload.language))
+        writeup, sources = _generate_album_writeup(album_id, payload.language)
+        return WriteupDraftResponse(writeup=writeup, sources=sources)
 
     @app.post("/api/albums/{album_id}/overview/draft", response_model=OverviewDraftResponse)
     async def generate_album_overview(album_id: int, payload: OverviewDraftRequest) -> OverviewDraftResponse:
-        return OverviewDraftResponse(overview=_generate_album_writeup(album_id, payload.language))
+        overview, sources = _generate_album_writeup(album_id, payload.language)
+        return OverviewDraftResponse(overview=overview, sources=sources)
 
     @app.patch("/api/albums/{album_id}/write-up", response_model=AlbumDetailRecord)
     async def save_album_writeup(album_id: int, payload: WriteupSaveRequest) -> AlbumDetailRecord:
@@ -696,6 +686,27 @@ def create_app(
         draft = db.create_import_job("artist", payload, draft_to_json(draft_data))
         return ImportDraftResponse(draft=draft)
 
+    @app.post("/api/artist-description/draft", response_model=ArtistDescriptionDraftResponse)
+    async def generate_artist_description(
+        payload: ArtistDescriptionDraftRequest,
+    ) -> ArtistDescriptionDraftResponse:
+        try:
+            description = importer.generate_artist_description(
+                payload.artist_name,
+                origin=payload.origin,
+                album_title=payload.album_title,
+                genre=payload.genre,
+                source_url=payload.source_url,
+                model=db.get_active_model(settings.model),
+            )
+        except Exception as exc:
+            detail = _friendly_ai_error(exc, action="artist description")
+            raise HTTPException(status_code=502, detail=detail) from exc
+        return ArtistDescriptionDraftResponse(
+            description=description,
+            sources=importer.last_artist_description_sources,
+        )
+
     @app.post("/api/import/album", response_model=ImportDraftResponse)
     async def import_album(payload: ImportRequest) -> ImportDraftResponse:
         _validate_album_source_url(payload.source_url)
@@ -704,6 +715,13 @@ def create_app(
         except Exception as exc:
             detail = f"Source import failed: {exc}"
             raise HTTPException(status_code=502, detail=detail) from exc
+        if not draft_data.genre:
+            fallback_genre = db.closest_album_genre_for_artist(
+                draft_data.artist_name or payload.artist_name,
+                draft_data.release_year,
+            )
+            if fallback_genre:
+                draft_data = draft_data.model_copy(update={"genre": fallback_genre})
         draft = db.create_import_job("album", payload, draft_to_json(draft_data))
         return ImportDraftResponse(draft=draft)
 

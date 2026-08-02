@@ -99,25 +99,26 @@ http://127.0.0.1:8780
 
 ## Spotlight Launcher
 
-Install the macOS Spotlight launcher once:
+Install the persistent macOS service and Spotlight launcher once:
 
 ```bash
+scripts/install_album_ranker_service.sh
 scripts/install_spotlight_launcher.sh
 ```
 
-After that, press Spotlight, type `Album Ranker`, and press Enter. The launcher will source `~/.zshrc`, create `.venv` and install the app if needed, start the local server if it is not already running, and open `http://127.0.0.1:8780`.
+The service runs from `~/Library/Application Support/Album Ranker` so macOS does not block its access to a repository under `Documents`. On first install, the script copies the existing database and covers into that runtime directory. Launchd starts it at login and restarts it after an unexpected exit.
 
-Launcher logs are written to `.data/launcher.log`. Server logs are written to `.data/server.log`.
+After that, press Spotlight, type `Album Ranker`, and press Enter. The launcher ensures the service is running and opens `http://127.0.0.1:8780`.
+
+Logs are written under `~/Library/Logs/Album Ranker`. Server logs rotate at 5 MB with three retained backups.
 
 ## Reinstall After Code Changes
 
-This repo is often run from a non-editable install in the local `.venv`. If a UI or backend change does not appear in the running app, reinstall the package:
+Deploy current source and restart the persistent service:
 
 ```bash
 cd /Users/darkcreation/Documents/git_repos/album-ranker
-source .venv/bin/activate
-python -m pip install .
-album-ranker
+scripts/install_album_ranker_service.sh
 ```
 
 ## Configuration
@@ -127,7 +128,7 @@ Environment variables:
 - `OPENAI_API_KEY`
   optional, only needed for real AI-assisted import
 - `ALBUM_RANKER_MODEL`
-  default: `gpt-5`
+  default: `gpt-5.6-terra`
 - `ALBUM_RANKER_HOST`
   default: `127.0.0.1`
 - `ALBUM_RANKER_PORT`
@@ -172,24 +173,16 @@ iCloud syncs them automatically — open them in any SQLite viewer on any signed
 
 ### Scheduled backup (launchd)
 
-The included plist runs daily at 03:00 and writes to iCloud:
+The service installer also registers a backup job that runs daily at 03:00 and writes to iCloud:
 
 ```text
-launchd/com.darkcreation.album-ranker-backup.plist
+scripts/install_album_ranker_service.sh
 ```
 
-**Load the job** (run once after cloning or after editing the plist):
+**Install or update both jobs:**
 
 ```bash
-# Create the iCloud backup folder first (launchd won't create it)
-mkdir -p ~/Library/Mobile\ Documents/com~apple~CloudDocs/album-ranker-backups
-
-# Copy the plist to the standard LaunchAgents location
-cp ~/Documents/git_repos/album-ranker/launchd/com.darkcreation.album-ranker-backup.plist \
-   ~/Library/LaunchAgents/
-
-# Register with launchd (modern macOS syntax)
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.darkcreation.album-ranker-backup.plist
+scripts/install_album_ranker_service.sh
 ```
 
 **Check status:**
@@ -201,7 +194,7 @@ launchctl print gui/$(id -u)/com.darkcreation.album-ranker-backup
 **View the log** (stdout + stderr go to the same file):
 
 ```bash
-tail -50 /Users/darkcreation/Documents/git_repos/album-ranker/.data/backup.log
+tail -50 "$HOME/Library/Logs/Album Ranker/backup.log"
 ```
 
 **Run the job immediately** (without waiting for 03:00):
@@ -228,9 +221,9 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.darkcreation.album-r
 
 | Location | Path |
 |---|---|
-| Default local | `.data/backups/album-ranker-YYYY-MM-DD.db` |
+| Default local | `~/Library/Application Support/Album Ranker/Data/backups/album-ranker-YYYY-MM-DD.db` |
 | iCloud (plist default) | `~/Library/Mobile Documents/com~apple~CloudDocs/album-ranker-backups/` |
-| Log | `.data/backup.log` |
+| Log | `~/Library/Logs/Album Ranker/backup.log` |
 
 Each backup is a complete, standalone SQLite file — open it directly with any SQLite browser to inspect or restore data.
 
