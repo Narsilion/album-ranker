@@ -198,6 +198,16 @@ def _create_album(
     ).json()
 
 
+def test_favicon_is_linked_and_served(client) -> None:
+    page = client.get("/albums")
+    favicon = client.get("/favicon.svg")
+
+    assert '<link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml">' in page.text
+    assert favicon.status_code == 200
+    assert favicon.headers["content-type"] == "image/svg+xml"
+    assert favicon.text.startswith("<svg")
+
+
 def test_album_detail_header_prioritizes_album_title_and_labels_release_year(client) -> None:
     album = _create_album(client, artist_name="Vanir", title="Wyrd", release_year=2026)
     page = client.get(f"/albums/{album['id']}")
@@ -359,6 +369,8 @@ def test_manual_album_create_and_render_pages(client) -> None:
     assert f'href="/artists/{artist_id}"' in artists_page.text
     assert "Album Import" in artist_detail_page.text
     assert 'id="artistRefreshGenerateDescription"' in artist_detail_page.text
+    assert 'class="secondary field-ai-button" id="artistGenerateDescription"' in artist_detail_page.text
+    assert 'showArtistDescriptionResult(form.description, status, result)' in artist_detail_page.text
     assert 'class="secondary textarea-clear-button" id="artistRefreshClearDescription"' in artist_detail_page.text
     assert 'artistRefreshForm.description.value = ""' in artist_detail_page.text
     assert 'fetchJson("/api/artist-description/draft"' in artist_detail_page.text
@@ -379,6 +391,8 @@ def test_manual_album_create_and_render_pages(client) -> None:
     assert "Album Import" not in artists_page.text
     assert 'class="album-bookmark-toggle cover-bookmark-btn"' in albums_page.text
     assert 'class="album-listened-toggle cover-listened-btn"' in albums_page.text
+    assert 'class="bookmark-note-toggle cover-note-btn"' in albums_page.text
+    assert albums_page.text.index('class="bookmark-note-toggle cover-note-btn"') < albums_page.text.index('class="album-title album-card-link"')
     assert 'class="album-listened-toggle cover-listened-btn"' in artist_detail_page.text
     assert f'href="/albums/{album_id}"' in artist_detail_page.text
     assert "artistAlbumImportForm.addEventListener" not in artists_page.text
@@ -875,6 +889,18 @@ def test_lists_page_supports_create_add_and_reorder(client) -> None:
     assert 'value="Band B - Record Two"' not in list_detail_page.text
 
 
+def test_list_move_buttons_keep_rapid_repeated_clicks_on_the_same_album(client) -> None:
+    created_list = client.post("/api/lists", json={"name": "Rapid Reorder"}).json()
+
+    lists_page = client.get("/lists")
+    detail_page = client.get(f"/lists/{created_list['id']}")
+
+    for page in (lists_page, detail_page):
+        assert "const repeatedAtSameSpot = recentMove" in page.text
+        assert "recentMove.item.isConnected ? recentMove.item : clickedItem" in page.text
+        assert 'moveFromButton(event, "down")' in page.text
+
+
 def test_list_details_can_be_renamed(client) -> None:
     created_list = client.post(
         "/api/lists",
@@ -1110,6 +1136,7 @@ def test_bookmarks_page_and_listened_workflow(client) -> None:
     assert bookmarks_page.status_code == 200
     assert "Wyrd" in bookmarks_page.text
     assert 'class="album-bookmark-toggle cover-bookmark-btn"' in bookmarks_page.text
+    assert 'class="bookmark-note-toggle cover-note-btn"' in bookmarks_page.text
     assert "Remove from Later" in bookmarks_page.text
     assert "move-up" not in bookmarks_page.text
     assert "Album Import" not in bookmarks_page.text

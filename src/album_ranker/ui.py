@@ -98,7 +98,7 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{_escape(title)}</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127925;</text></svg>">
+    <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml">
     <style>
       :root {{
         --bg: #071018;
@@ -602,7 +602,8 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         display: block;
       }}
       .cover-bookmark-btn,
-      .cover-listened-btn {{
+      .cover-listened-btn,
+      .cover-note-btn {{
         position: absolute;
         top: 8px;
         width: 32px;
@@ -626,14 +627,27 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
       .cover-listened-btn {{
         left: 8px;
       }}
+      .cover-note-btn {{
+        top: auto;
+        right: 8px;
+        bottom: 8px;
+      }}
       .cover-frame:hover .cover-bookmark-btn,
       .cover-frame:hover .cover-listened-btn,
+      .cover-frame:hover .cover-note-btn,
       .cover-frame:focus-within .cover-bookmark-btn,
       .cover-frame:focus-within .cover-listened-btn,
-      .cover-bookmark-btn[data-bookmarked="true"] {{
+      .cover-frame:focus-within .cover-note-btn,
+      .cover-bookmark-btn[data-bookmarked="true"],
+      .cover-note-btn.has-note,
+      .cover-note-btn.active {{
         opacity: 1;
       }}
       .cover-bookmark-btn[data-bookmarked="true"] {{
+        color: var(--accent);
+      }}
+      .cover-note-btn.has-note,
+      .cover-note-btn.active {{
         color: var(--accent);
       }}
       .cover-listened-btn[data-listened="true"] {{
@@ -641,7 +655,8 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         color: #89d88f;
       }}
       .cover-bookmark-btn:hover,
-      .cover-listened-btn:hover {{
+      .cover-listened-btn:hover,
+      .cover-note-btn:hover {{
         background: rgba(0,0,0,0.8);
       }}
       .album-title {{
@@ -663,6 +678,15 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         margin-top: 4px;
         color: var(--accent);
         font-size: 13px;
+      }}
+      #albumGrid .album-type {{
+        font-size: 11px;
+      }}
+      #albumGrid .album-subtitle {{
+        color: color-mix(in srgb, var(--ink) 82%, var(--muted));
+      }}
+      #albumGrid .album-genre {{
+        font-size: 12px;
       }}
       .letter-btn {{
         padding: 3px 8px;
@@ -749,24 +773,7 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         box-sizing: border-box;
         resize: vertical;
       }}
-      .bookmark-note-toggle {{
-        font-size: 0.75rem;
-        padding: 2px 6px;
-        margin-top: 4px;
-        color: var(--muted);
-        background: none;
-        border: 1px solid var(--line);
-        border-radius: 4px;
-        cursor: pointer;
-      }}
-      .bookmark-note-toggle.active {{
-        color: var(--fg);
-        border-color: var(--accent);
-      }}
-      .bookmark-note-toggle.has-note {{
-        color: var(--fg);
-      }}
-      .bookmark-note-row {{
+      .bookmark-note-expand {{
         margin-top: 4px;
       }}
       .star-widget-label {{
@@ -1187,7 +1194,8 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
       }}
       @media (hover: none), (pointer: coarse) {{
         .cover-frame .cover-bookmark-btn,
-        .cover-frame .cover-listened-btn {{
+        .cover-frame .cover-listened-btn,
+        .cover-frame .cover-note-btn {{
           width: 38px;
           height: 38px;
           opacity: 1;
@@ -1683,7 +1691,9 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
           const hasNote = Boolean(payload.bookmark_note);
           document.querySelectorAll(`.bookmark-note-toggle[data-album-id="${{albumId}}"]`).forEach((btn) => {{
             btn.classList.toggle("has-note", hasNote);
-            btn.textContent = hasNote ? "💬 note" : "✎";
+            const label = hasNote ? "Edit note" : "Add note";
+            btn.title = label;
+            btn.setAttribute("aria-label", label);
           }});
           const detailNoteInput = document.getElementById("bookmarkNoteInput");
           if (detailNoteInput && String(detailNoteInput.dataset.albumId) === String(albumId)) {{
@@ -1768,6 +1778,7 @@ def _album_card_markup(
         rating_widget = _rating_markup(album.rating)
     cover_bookmark_btn = _album_cover_bookmark_btn(album) if include_bookmark_action else ""
     cover_listened_btn = _album_cover_listened_btn(album) if include_listened_cover_action else ""
+    cover_note_btn = _album_cover_note_btn(album) if show_bookmark_note else ""
     listened_button = (
         _album_listened_button(album)
         if include_listened_action
@@ -1775,21 +1786,11 @@ def _album_card_markup(
     )
     actions = f'<div class="album-card-actions">{listened_button}</div>' if listened_button else ""
     if show_bookmark_note:
-        has_note = bool(album.bookmark_note)
-        toggle_label = "💬 note" if has_note else "✎"
         note_area = (
-            f'<div class="bookmark-note-row" onclick="event.stopPropagation();">'
-            f'<button type="button" class="bookmark-note-toggle{" has-note" if has_note else ""}" '
-            f'data-album-id="{album.id}" '
-            f'onclick="event.preventDefault();event.stopPropagation();'
-            f'var x=this.nextElementSibling;var shown=x.style.display!==\'none\';'
-            f'x.style.display=shown?\'none\':\'\';this.classList.toggle(\'active\',!shown);">'
-            f'{toggle_label}</button>'
             f'<div class="bookmark-note-expand" style="display:none;">'
             f'<textarea class="bookmark-note-input" data-album-id="{album.id}" rows="2" '
             f'placeholder="Add a note\u2026">{_escape(album.bookmark_note or "")}'
-            f'</textarea>'
-            f'</div></div>'
+            f'</textarea></div>'
         )
     else:
         note_area = ""
@@ -1799,7 +1800,7 @@ def _album_card_markup(
           <a class="cover album-card-link" href="/albums/{album.id}" aria-label="Open {_escape(album.title)}">
             <img src="{_cover_src(album.cover_image_path)}" alt="{_escape(album.title)} cover">
           </a>
-          {cover_listened_btn}{cover_bookmark_btn}
+          {cover_listened_btn}{cover_bookmark_btn}{cover_note_btn}
         </div>
         <a class="album-title album-card-link" href="/albums/{album.id}">{_escape(album.title)}{_escape(year_str)}</a>
         {f'<div class="album-type muted">{_escape(album.album_type)}</div>' if album.album_type else ''}
@@ -1837,6 +1838,11 @@ _LISTENED_SVG_EMPTY = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">'
     '<circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/></svg>'
 )
+_NOTE_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" '
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/></svg>'
+)
 
 _TRACK_HEART_FILLED = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">'
@@ -1857,6 +1863,20 @@ def _album_cover_bookmark_btn(album: AlbumCardRecord) -> str:
         f'data-album-id="{album.id}" data-bookmarked="{str(bookmarked).lower()}" '
         f'title="{label}" aria-label="{label}" aria-pressed="{str(bookmarked).lower()}" '
         f'onclick="event.preventDefault(); event.stopPropagation();">{icon}</button>'
+    )
+
+
+def _album_cover_note_btn(album: AlbumCardRecord) -> str:
+    has_note = bool(album.bookmark_note)
+    label = "Edit note" if has_note else "Add note"
+    return (
+        f'<button type="button" class="bookmark-note-toggle cover-note-btn{" has-note" if has_note else ""}" '
+        f'data-album-id="{album.id}" title="{label}" aria-label="{label}" aria-expanded="false" '
+        f'onclick="event.preventDefault();event.stopPropagation();'
+        f'var x=this.closest(\'.album-card\').querySelector(\'.bookmark-note-expand\');'
+        f'var shown=x.style.display!==\'none\';x.style.display=shown?\'none\':\'\';'
+        f'this.classList.toggle(\'active\',!shown);this.setAttribute(\'aria-expanded\',String(!shown));'
+        f'if(!shown)x.querySelector(\'textarea\').focus();">{_NOTE_SVG}</button>'
     )
 
 
@@ -2527,7 +2547,10 @@ def render_artist_detail_page(
             <input id="artistEditExternalUrl" name="external_url" value="{_escape(artist.external_url or '')}" placeholder="https://www.metal-archives.com/bands/..." style="font-size:0.9em;">
           </div>
           <div class="form-field">
-            <label class="form-label" for="artistEditDescription">Description</label>
+            <div class="field-label-row">
+              <label class="form-label" for="artistEditDescription">Description</label>
+              <button type="button" class="secondary field-ai-button" id="artistGenerateDescription">Generate with AI</button>
+            </div>
             <textarea id="artistEditDescription" name="description" placeholder="Artist description">{_escape(artist.description or '')}</textarea>
           </div>
           <div class="row">
@@ -2732,6 +2755,35 @@ def render_artist_detail_page(
           document.getElementById("artistEditCancel").addEventListener("click", () => {{
             artistEditPanel.classList.add("hidden");
             syncArtistEditToggle();
+          }});
+          document.getElementById("artistGenerateDescription").addEventListener("click", async (event) => {{
+            const generateBtn = event.currentTarget;
+            const originalLabel = generateBtn.textContent;
+            const form = document.getElementById("artistDetailForm");
+            const status = document.getElementById("artistDetailStatus");
+            try {{
+              validateRequired(form.name.value, "Artist name");
+              generateBtn.disabled = true;
+              generateBtn.textContent = "Generating...";
+              status.textContent = "Generating artist description with AI...";
+              const result = await fetchJson("/api/artist-description/draft", {{
+                method: "POST",
+                body: JSON.stringify({{
+                  artist_name: form.name.value.trim(),
+                  origin: form.origin.value.trim() || null,
+                  album_title: {_json(description_context_album_title)},
+                  genre: {_json(description_context_genre)},
+                  source_url: validateUrl(form.external_url.value, "External URL"),
+                }}),
+              }});
+              showArtistDescriptionResult(form.description, status, result);
+              form.description.focus();
+            }} catch (err) {{
+              status.textContent = err.message || "AI description generation failed.";
+            }} finally {{
+              generateBtn.disabled = false;
+              generateBtn.textContent = originalLabel;
+            }}
           }});
           document.getElementById("artistDetailForm").addEventListener("submit", async (event) => {{
             event.preventDefault();
@@ -4659,6 +4711,7 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
         }}
         document.querySelectorAll(".list-block").forEach((block) => {{
           const listId = block.dataset.listId;
+          let recentMove = null;
           const move = (item, direction) => {{
             const sibling = direction === "up" ? item.previousElementSibling : item.nextElementSibling;
             if (!sibling) return;
@@ -4669,8 +4722,20 @@ def render_lists_page(settings: SettingsRecord, lists: list[AlbumListRecord], al
               if (counter) counter.textContent = `${{index + 1}}.`;
             }});
           }};
-          block.querySelectorAll(".move-up").forEach((button) => button.addEventListener("click", () => move(button.closest(".rank-item"), "up")));
-          block.querySelectorAll(".move-down").forEach((button) => button.addEventListener("click", () => move(button.closest(".rank-item"), "down")));
+          const moveFromButton = (event, direction) => {{
+            const now = Date.now();
+            const repeatedAtSameSpot = recentMove
+              && recentMove.direction === direction
+              && now - recentMove.at < 600
+              && Math.abs(event.clientX - recentMove.x) < 5
+              && Math.abs(event.clientY - recentMove.y) < 5;
+            const clickedItem = event.currentTarget.closest(".rank-item");
+            const item = repeatedAtSameSpot && recentMove.item.isConnected ? recentMove.item : clickedItem;
+            move(item, direction);
+            recentMove = {{ item, direction, at: now, x: event.clientX, y: event.clientY }};
+          }};
+          block.querySelectorAll(".move-up").forEach((button) => button.addEventListener("click", (event) => moveFromButton(event, "up")));
+          block.querySelectorAll(".move-down").forEach((button) => button.addEventListener("click", (event) => moveFromButton(event, "down")));
           block.querySelector(".save-order")?.addEventListener("click", async () => {{
             const itemIds = [...block.querySelectorAll(".rank-item[data-item-id]")].map((item) => Number(item.dataset.itemId));
             await fetchJson(`/api/lists/${{listId}}/items/reorder`, {{
@@ -5116,6 +5181,7 @@ def render_list_detail_page(settings: SettingsRecord, record: AlbumListRecord, a
         }});
         document.querySelectorAll(".list-block").forEach((block) => {{
           const listId = block.dataset.listId;
+          let recentMove = null;
           const move = (item, direction) => {{
             const sibling = direction === "up" ? item.previousElementSibling : item.nextElementSibling;
             if (!sibling) return;
@@ -5126,8 +5192,20 @@ def render_list_detail_page(settings: SettingsRecord, record: AlbumListRecord, a
               if (counter) counter.textContent = `${{index + 1}}.`;
             }});
           }};
-          block.querySelectorAll(".move-up").forEach((button) => button.addEventListener("click", () => move(button.closest(".rank-item"), "up")));
-          block.querySelectorAll(".move-down").forEach((button) => button.addEventListener("click", () => move(button.closest(".rank-item"), "down")));
+          const moveFromButton = (event, direction) => {{
+            const now = Date.now();
+            const repeatedAtSameSpot = recentMove
+              && recentMove.direction === direction
+              && now - recentMove.at < 600
+              && Math.abs(event.clientX - recentMove.x) < 5
+              && Math.abs(event.clientY - recentMove.y) < 5;
+            const clickedItem = event.currentTarget.closest(".rank-item");
+            const item = repeatedAtSameSpot && recentMove.item.isConnected ? recentMove.item : clickedItem;
+            move(item, direction);
+            recentMove = {{ item, direction, at: now, x: event.clientX, y: event.clientY }};
+          }};
+          block.querySelectorAll(".move-up").forEach((button) => button.addEventListener("click", (event) => moveFromButton(event, "up")));
+          block.querySelectorAll(".move-down").forEach((button) => button.addEventListener("click", (event) => moveFromButton(event, "down")));
           block.querySelector(".save-order")?.addEventListener("click", async () => {{
             const itemIds = [...block.querySelectorAll(".rank-item[data-item-id]")].map((item) => Number(item.dataset.itemId));
             await fetchJson(`/api/lists/${{listId}}/items/reorder`, {{

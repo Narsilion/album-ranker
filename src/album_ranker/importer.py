@@ -1129,6 +1129,16 @@ def _extract_ytm_artist_name(
     return ""
 
 
+def _clean_ytm_album_notes(value: Any) -> str | None:
+    """Keep real album descriptions while dropping YTM's type/artist label."""
+    notes = str(value or "").strip()
+    if not notes:
+        return None
+    if re.fullmatch(r"(?:Album|EP|Single)\s*[\u2022\u00b7]\s*.+", notes, re.IGNORECASE):
+        return None
+    return notes
+
+
 def _ytm_thumbnail_url(obj: Any) -> str | None:
     if not isinstance(obj, dict):
         return None
@@ -1318,7 +1328,7 @@ def _youtube_music_album_draft_from_browse(
         release_year=release_year,
         duration_seconds=total_seconds,
         cover_source_url=cover_url,
-        notes=str(microformat.get("description") or "").strip() or None,
+        notes=_clean_ytm_album_notes(microformat.get("description")),
         tracks=tracks,
     )
 
@@ -2337,6 +2347,20 @@ def _strip_inline_web_citations(writeup: str) -> str:
     return re.sub(r"\s*\(\[[^\]]+\]\(https?://[^)]+\)\)", "", writeup)
 
 
+def _titlecase_known_genres(description: str, genre: str | None) -> str:
+    """Title-case every word in known genre names in an artist biography."""
+    genre_names = [part.strip() for part in re.split(r"\s*[/,;]\s*", genre or "") if part.strip()]
+    for genre_name in sorted(genre_names, key=len, reverse=True):
+        pattern = re.escape(genre_name).replace(r"\ ", r"[\s-]+")
+        description = re.sub(
+            rf"(?<!\w){pattern}(?!\w)",
+            lambda match: _titlecase_genre(match.group(0)),
+            description,
+            flags=re.IGNORECASE,
+        )
+    return description
+
+
 class AlbumWriteupGenerator:
     def __init__(self, client: AlbumWriteupAIClient | None) -> None:
         self.client = client
@@ -2432,7 +2456,10 @@ class AlbumWriteupGenerator:
                     "of 60 to 90 words containing concrete facts such as origin, members, genre, career history, and "
                     "notable releases when supported by sources. Do not infer style from a song or album title, and avoid vague "
                     "filler such as 'mysterious', 'intriguing', 'possibly', or 'limited information'. Do not include changing "
-                    "statistics such as listener, follower, or play counts. Return clean prose in the description field without "
+                    "statistics such as listener, follower, or play counts. Write every musical genre name in title case, "
+                    "capitalizing every word and every hyphenated part; for example, Black Metal, Death Metal, Dream Pop, "
+                    "or Heavy Psych-Rock. Do not write genre names in all caps. "
+                    "Return clean prose in the description field without "
                     "headings, markdown, URLs, or inline citations. In the sources field, return 2 to 5 web pages actually used, "
                     "each with a concise title and canonical URL. Do not use Reddit, forums, or user-generated playlists as "
                     "primary biographical sources.\n\n"
@@ -2444,6 +2471,7 @@ class AlbumWriteupGenerator:
             description = str(data["description"]).strip()
             if not description:
                 raise AIClientError("AI returned an empty artist description")
+            description = _titlecase_known_genres(description, genre)
             structured_source_list: list[dict[str, str]] = []
             structured_sources = data.get("sources")
             if isinstance(structured_sources, list):
@@ -2565,7 +2593,8 @@ class AlbumWriteupGenerator:
             "📌 Description:\n"
             "A few paragraphs about the album — history, sound, reception, notable facts.\n\n"
             "⭐ User ratings:\n"
-            "Source: score/scale (rating count when available)\n\n"
+            "Source: score/scale (rating count when available)\n"
+            "Metal Archives reviews: average% (review count)\n\n"
             "🎧 Listen:\n"
             f"{listen_line_example}"
         )
@@ -2578,7 +2607,8 @@ class AlbumWriteupGenerator:
             "📌 Описание:\n"
             "Несколько абзацев об альбоме — история, звучание, reception, факты.\n\n"
             "⭐ Пользовательские оценки:\n"
-            "Источник: оценка/шкала (количество оценок, если доступно)\n\n"
+            "Источник: оценка/шкала (количество оценок, если доступно)\n"
+            "Metal Archives reviews: средняя оценка% (количество рецензий)\n\n"
             "🎧 Слушать:\n"
             f"{listen_line_example}"
         )
@@ -2592,8 +2622,11 @@ class AlbumWriteupGenerator:
             f"Search the web for the exact album before writing, using the artist, album title, and year together to disambiguate it. "
             f"Use the provided metadata and source excerpts as additional context. Prefer official artist or label pages, Bandcamp, "
             f"MusicBrainz, Discogs, AllMusic, and reputable music publications.\n"
-            f"Research public user/community ratings on sources such as Rate Your Music, Album of the Year, Sputnikmusic, Metal Storm, "
-            f"or Metal Archives. When at least one verifiable user rating exists, include the User ratings section with each source's "
+            f"Research public user/community ratings on Rate Your Music, Album of the Year, and Metal Storm. Do not use Sputnikmusic. "
+            f"For metal albums, explicitly check the exact album's reviews on Encyclopaedia Metallum (metal-archives.com). Report its "
+            f"review average as 'Metal Archives reviews: NN% (N reviews)' when both values are available; this is a review average, not "
+            f"a user-rating score, so label it clearly. When at least one verifiable rating or Metal Archives review average exists, "
+            f"include the User ratings section with each source's "
             f"score, original scale, and rating/vote count when available. Do not convert scales, confuse critic scores with user scores, "
             f"or invent missing numbers. Omit the entire User ratings section when no verifiable user rating is found. The sources field "
             f"must include the exact page supporting every reported rating. Keep the overview text clean: do not put inline citations, "
@@ -2656,10 +2689,10 @@ class AlbumWriteupGenerator:
             rating_domains = (
                 "albumoftheyear.org",
                 "rateyourmusic.com",
-                "sputnikmusic.com",
                 "metalstorm.net",
                 "metal-archives.com",
             )
+            sources = [source for source in sources if "sputnikmusic.com" not in source["url"]]
             rating_sources = [source for source in sources if any(domain in source["url"] for domain in rating_domains)]
             other_sources = [source for source in sources if source not in rating_sources]
             combined_sources = structured_source_list + rating_sources + other_sources

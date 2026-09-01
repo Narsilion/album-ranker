@@ -308,7 +308,7 @@ def test_artist_description_generator_uses_source_context_and_selected_model(mon
         model="gpt-5.4-mini",
     )
 
-    assert description == "The Haunted Youth is a Belgian dream-pop project."
+    assert description == "The Haunted Youth is a Belgian Dream-Pop project."
     assert captured["model"] == "gpt-5.4-mini"
     assert captured["schema_name"] == "artist_description"
     assert "Belgian dream pop project" in captured["user_prompt"]
@@ -317,12 +317,26 @@ def test_artist_description_generator_uses_source_context_and_selected_model(mon
     assert "quote the artist name" in captured["user_prompt"]
     assert "60 to 90 words" in captured["user_prompt"]
     assert "listener, follower, or play counts" in captured["user_prompt"]
+    assert "capitalizing every word and every hyphenated part" in captured["user_prompt"]
+    assert "Heavy Psych-Rock" in captured["user_prompt"]
+    assert "Do not write genre names in all caps" in captured["user_prompt"]
     assert "Do not use Reddit" in captured["user_prompt"]
     assert "Imported album: Boys Cry Too" in captured["user_prompt"]
     assert generator.last_artist_description_sources == [
         {"title": "Official artist", "url": "https://thehauntedyouth.com"},
         {"title": "Artist source", "url": "https://example.com/the-haunted-youth"},
     ]
+
+
+def test_titlecase_known_genres_handles_multiple_and_hyphenated_names() -> None:
+    description = "The band plays atmospheric black metal with dream-pop and heavy psych-rock textures."
+
+    assert importer._titlecase_known_genres(
+        description,
+        "Atmospheric Black Metal / Dream Pop / Heavy Psych-Rock",
+    ) == (
+        "The band plays Atmospheric Black Metal with Dream-Pop and Heavy Psych-Rock textures."
+    )
 
 
 def test_album_writeup_strips_inline_web_citations() -> None:
@@ -403,6 +417,9 @@ def test_album_writeup_prompt_links_youtube_music_when_stream_url_is_youtube(mon
     assert f"Spotify album search URL: {spotify_search_url}" in prompt
     assert "When only YouTube Music is known, write '[YouTube Music](url) | Spotify'." in prompt
     assert "Research public user/community ratings" in prompt
+    assert "Do not use Sputnikmusic" in prompt
+    assert "explicitly check the exact album's reviews on Encyclopaedia Metallum" in prompt
+    assert "Metal Archives reviews: NN% (N reviews)" in prompt
     assert "Do not convert scales" in prompt
     assert "exact page supporting every reported rating" in prompt
     assert "do not put inline citations" in prompt
@@ -1385,6 +1402,27 @@ def test_ytm_album_draft_extracts_artist_from_current_metadata_shape(monkeypatch
     assert draft.artist_name == "Nathaniel Rateliff & The Night Sweats"
 
 
+def test_ytm_browse_album_draft_discards_type_and_artist_label_from_notes() -> None:
+    draft = importer._youtube_music_album_draft_from_browse(
+        ImportRequest(
+            artist_name="",
+            source_url="https://music.youtube.com/watch?v=xUG2IuSpLqI",
+        ),
+        {
+            "microformat": {
+                "microformatDataRenderer": {
+                    "title": "Example Album - Album by Example Artist",
+                    "description": "Album \u2022 Example Artist",
+                }
+            }
+        },
+        "https://music.youtube.com/watch?v=xUG2IuSpLqI",
+    )
+
+    assert draft is not None
+    assert draft.notes is None
+
+
 def test_ytm_artist_draft_extracts_artist_from_current_metadata_shape(monkeypatch) -> None:
     og_html = """
     <html>
@@ -1596,6 +1634,7 @@ def test_ytm_watch_album_draft_resolves_full_album(monkeypatch) -> None:
     assert draft.album_type == "Full-length"
     assert draft.release_year == 2026
     assert draft.album_external_url == "https://music.youtube.com/playlist?list=OLAK5uy_lC_wziTi5fDBlkEqSexaVeCxLgliVcWtA"
+    assert draft.notes == "Album description."
     assert len(draft.tracks) == 10
     assert draft.tracks[0].title == "Where There's Smoke, There's Fire"
     assert draft.tracks[9].title == "Nobody But You Baby"

@@ -6,12 +6,13 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from album_ranker.db import Database
+from album_ranker.assets import FAVICON_SVG
 from album_ranker.importer import (
     CoverDownloader,
     MetadataImporter,
@@ -242,6 +243,15 @@ def create_app(
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.cover_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/library-data", StaticFiles(directory=settings.data_dir), name="library-data")
+
+    @app.get("/favicon.svg")
+    @app.get("/favicon.ico")
+    async def favicon() -> Response:
+        return Response(
+            content=FAVICON_SVG,
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:

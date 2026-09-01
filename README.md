@@ -112,14 +112,17 @@ After that, press Spotlight, type `Album Ranker`, and press Enter. The launcher 
 
 Logs are written under `~/Library/Logs/Album Ranker`. Server logs rotate at 5 MB with three retained backups.
 
-## Reinstall After Code Changes
+## Deploy and Restart After Code Changes
 
 Deploy current source and restart the persistent service:
 
 ```bash
 cd /Users/darkcreation/Documents/git_repos/album-ranker
-scripts/install_album_ranker_service.sh
+scripts/restart_album_ranker.sh
 ```
+
+Use `scripts/install_album_ranker_service.sh` only for the initial service
+installation or when its launchd configuration changes.
 
 ## Configuration
 

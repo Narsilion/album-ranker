@@ -24,6 +24,14 @@ Use this file to avoid re-discovering the project structure on every task.
   source .venv/bin/activate
   python -m pip install .
   ```
+- The macOS launchd service runs from a separate deployment under
+  `~/Library/Application Support/Album Ranker`. After code changes, deploy and
+  force-restart that service with:
+  ```bash
+  scripts/restart_album_ranker.sh
+  ```
+  Do not use `scripts/launch_album_ranker.sh` for this purpose: when the server
+  is already healthy, that launcher only opens the app and does not restart it.
 - Daily DB backup command: `album-ranker-backup`
 - Daily backup `launchd` template: `launchd/com.darkcreation.album-ranker-backup.plist`
 - Generated code under `build/lib/album_ranker/` should not be edited.
