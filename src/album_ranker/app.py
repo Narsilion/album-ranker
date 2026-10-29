@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -10,6 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.concurrency import run_in_threadpool
 
 from album_ranker.db import Database
 from album_ranker.assets import FAVICON_SVG
@@ -20,10 +22,13 @@ from album_ranker.importer import (
     infer_cover_source_url_from_album_url,
     metal_archives_album_draft_from_url,
     metal_archives_artist_url_from_album_url,
+    spotify_album_url,
     wikipedia_artist_url_from_name,
 )
-from album_ranker.openai_client import AlbumWriteupAIClient
+from album_ranker.openai_client import AlbumWriteupAIClient, OpenAIClientError
 from album_ranker.schemas import (
+    AlbumDescriptionDraftRequest,
+    AlbumDescriptionDraftResponse,
     AlbumBookmarkPatch,
     AlbumBookmarkNotePatch,
     AlbumDetailRecord,
@@ -230,18 +235,29 @@ def create_app(
     available_models_by_provider = {"openai": available_models}
     db = Database(settings.db_path)
     db.initialize()
+    cached_models = db.get_app_setting("available_openai_models")
+    if cached_models:
+        try:
+            models = json.loads(cached_models)
+            if isinstance(models, list) and models and all(isinstance(model, str) and model for model in models):
+                available_models[:] = models
+        except ValueError:
+            pass
     stored_provider = db.get_active_ai_provider(settings.ai_provider)
     active_model = db.get_active_model(settings.model)
     if stored_provider != "openai" or "/" in active_model:
         active_model = settings.model
     db.set_app_setting("active_model", active_model)
     db.set_app_setting("active_ai_provider", "openai")
+    if active_model not in available_models:
+        available_models.insert(0, active_model)
     importer = importer or MetadataImporter(AlbumWriteupAIClient(settings.openai_api_key))
     cover_downloader = cover_downloader or CoverDownloader(settings.cover_dir)
 
     app = FastAPI(title="Album Ranker")
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.cover_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
     app.mount("/library-data", StaticFiles(directory=settings.data_dir), name="library-data")
 
     @app.get("/favicon.svg")
@@ -319,8 +335,8 @@ def create_app(
         return render_albums_page(build_settings(), db.list_albums(), db.list_artists(), db.list_genres(), [])
 
     @app.get("/imports", response_class=HTMLResponse)
-    async def imports_page() -> str:
-        return render_imports_page(build_settings())
+    async def imports_page() -> HTMLResponse:
+        return HTMLResponse(render_imports_page(build_settings()), headers={"Cache-Control": "no-store"})
 
     @app.get("/bookmarks", response_class=HTMLResponse)
     async def bookmarks_page() -> str:
@@ -360,6 +376,23 @@ def create_app(
 
     @app.get("/api/settings", response_model=SettingsRecord)
     async def get_settings() -> SettingsRecord:
+        return build_settings()
+
+    @app.post("/api/settings/models/refresh", response_model=SettingsRecord)
+    async def refresh_models() -> SettingsRecord:
+        if not settings.openai_api_key:
+            raise HTTPException(status_code=400, detail="OPENAI_API_KEY is not configured.")
+        try:
+            models = await run_in_threadpool(AlbumWriteupAIClient(settings.openai_api_key).list_models)
+            if not models:
+                raise OpenAIClientError("No text generation models were returned. The previous list was kept.")
+        except OpenAIClientError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        active_model = db.get_active_model(settings.model)
+        if active_model not in models:
+            models.insert(0, active_model)
+        db.set_app_setting("available_openai_models", json.dumps(models))
+        available_models[:] = models
         return build_settings()
 
     @app.put("/api/settings", response_model=SettingsRecord)
@@ -591,7 +624,7 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"ok": True}
 
-    def _generate_album_writeup(album_id: int, language: str) -> tuple[str, list[dict[str, str]]]:
+    def _generate_album_writeup(album_id: int, language: str, limit_for_telegram: bool) -> tuple[str, list[dict[str, str]]]:
         try:
             album = db.get_album(album_id)
         except KeyError as exc:
@@ -601,6 +634,7 @@ def create_app(
                 album,
                 language=language,
                 model=db.get_active_model(settings.model),
+                limit_for_telegram=limit_for_telegram,
             )
         except Exception as exc:
             detail = _friendly_ai_error(exc, action="write-up")
@@ -609,12 +643,12 @@ def create_app(
 
     @app.post("/api/albums/{album_id}/write-up/draft", response_model=WriteupDraftResponse)
     async def generate_album_writeup(album_id: int, payload: WriteupDraftRequest) -> WriteupDraftResponse:
-        writeup, sources = _generate_album_writeup(album_id, payload.language)
+        writeup, sources = _generate_album_writeup(album_id, payload.language, payload.limit_for_telegram)
         return WriteupDraftResponse(writeup=writeup, sources=sources)
 
     @app.post("/api/albums/{album_id}/overview/draft", response_model=OverviewDraftResponse)
     async def generate_album_overview(album_id: int, payload: OverviewDraftRequest) -> OverviewDraftResponse:
-        overview, sources = _generate_album_writeup(album_id, payload.language)
+        overview, sources = _generate_album_writeup(album_id, payload.language, payload.limit_for_telegram)
         return OverviewDraftResponse(overview=overview, sources=sources)
 
     @app.patch("/api/albums/{album_id}/write-up", response_model=AlbumDetailRecord)
@@ -696,6 +730,16 @@ def create_app(
         draft = db.create_import_job("artist", payload, draft_to_json(draft_data))
         return ImportDraftResponse(draft=draft)
 
+    @app.post("/api/album-description/draft", response_model=AlbumDescriptionDraftResponse)
+    async def generate_album_description(payload: AlbumDescriptionDraftRequest) -> AlbumDescriptionDraftResponse:
+        try:
+            description, sources = importer.generate_album_description(
+                **payload.model_dump(), model=db.get_active_model(settings.model),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=_friendly_ai_error(exc, action="album description")) from exc
+        return AlbumDescriptionDraftResponse(description=description, sources=sources)
+
     @app.post("/api/artist-description/draft", response_model=ArtistDescriptionDraftResponse)
     async def generate_artist_description(
         payload: ArtistDescriptionDraftRequest,
@@ -704,6 +748,7 @@ def create_app(
             description = importer.generate_artist_description(
                 payload.artist_name,
                 origin=payload.origin,
+                release_year=payload.release_year,
                 album_title=payload.album_title,
                 genre=payload.genre,
                 source_url=payload.source_url,
@@ -714,6 +759,8 @@ def create_app(
             raise HTTPException(status_code=502, detail=detail) from exc
         return ArtistDescriptionDraftResponse(
             description=description,
+            genre=getattr(importer.writeup_generator, "last_artist_description_genre", None),
+            origin=getattr(importer.writeup_generator, "last_artist_description_origin", None),
             sources=importer.last_artist_description_sources,
         )
 
@@ -788,6 +835,8 @@ def create_app(
             artist_source_url = payload.source_url
         if not artist_source_url and _is_alterportal_album_url(payload.source_url) and album_data.artist_name:
             artist_source_url = payload.source_url
+        if not artist_source_url and spotify_album_url(payload.source_url) and album_data.artist_name:
+            artist_source_url = spotify_album_url(payload.source_url)
         existing_artist = db.get_artist_by_name(album_data.artist_name) if album_data.artist_name else None
         artist_exists = existing_artist is not None
         artist_draft = None

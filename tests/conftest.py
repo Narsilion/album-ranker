@@ -45,7 +45,7 @@ class FakeImporter(MetadataImporter):
             ],
         )
 
-    def generate_album_writeup(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:  # type: ignore[override]
+    def generate_album_writeup(self, album: AlbumDetailRecord, *, language: str, model: str, limit_for_telegram: bool = True) -> str:  # type: ignore[override]
         lang_tag = "RU" if language == "ru" else "EN"
         return (
             f"🎸 Album: {album.artist_name} — {album.title}\n\n"

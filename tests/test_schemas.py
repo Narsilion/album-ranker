@@ -51,3 +51,11 @@ def test_writeup_save_payloads_have_length_limits() -> None:
         WriteupSaveRequest(writeup=too_long)
     with pytest.raises(ValidationError):
         OverviewSaveRequest(overview=too_long)
+
+
+def test_writeup_telegram_limit_defaults_on_and_supports_opt_out() -> None:
+    from album_ranker.schemas import OverviewDraftRequest, WriteupDraftRequest
+
+    for request in (WriteupDraftRequest, OverviewDraftRequest):
+        assert request(language="en").limit_for_telegram is True
+        assert request(language="ru", limit_for_telegram=False).limit_for_telegram is False

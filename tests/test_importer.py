@@ -238,11 +238,11 @@ def test_metadata_importer_delegates_source_and_writeup_responsibilities() -> No
         def generate_album_overview(self, album, *, language, model):
             return self.generate_album_writeup(album, language=language, model=model)
 
-        def generate_album_writeup(self, album, *, language, model):
+        def generate_album_writeup(self, album, *, language, model, limit_for_telegram=True):
             self.writeup_called = True
             return f"{album.artist_name} - {album.title}"
 
-        def generate_artist_description(self, artist_name, *, origin, album_title, genre, source_url, model):
+        def generate_artist_description(self, artist_name, *, origin, album_title, genre, source_url, model, release_year=None):
             return f"Description of {artist_name}"
 
     source = FakeSourceImporter()
@@ -453,9 +453,12 @@ def test_album_writeup_prompt_links_spotify_when_stream_url_is_spotify(monkeypat
     )
 
     prompt = captured["prompt"]
-    assert "YouTube Music | [Spotify](https://open.spotify.com/album/test)" in prompt
+    assert (
+        "[YouTube Music](https://music.youtube.com/search?q=Band+Album) | "
+        "[Spotify](https://open.spotify.com/album/test)"
+    ) in prompt
     assert "When only Spotify is known, write 'YouTube Music | [Spotify](url)'." in prompt
-    assert "[YouTube Music](https://music.youtube.com/" not in prompt
+    assert "YouTube Music album search URL: https://music.youtube.com/search?q=Band+Album" in prompt
 
 
 def test_extract_spotify_album_url_from_search_redirect() -> None:
@@ -552,6 +555,34 @@ def test_album_writeup_adds_spotify_search_result_to_prompt_and_output(monkeypat
         in captured["prompt"]
     )
     assert f"| [Spotify]({spotify_url})" in result
+
+
+@pytest.mark.parametrize("youtube_url", [None, "https://music.youtube.com/playlist?list=album549"])
+def test_album_writeup_uses_metadata_or_search_for_youtube_music(monkeypatch, youtube_url) -> None:
+    monkeypatch.setattr(importer, "_fetch_url_excerpt", lambda url: "")
+    captured = {}
+
+    class FakeClient:
+        def generate_json(self, **kwargs):
+            captured["prompt"] = kwargs["user_prompt"]
+            return {"overview": "Album description.\n\n🎧 Listen:\nYouTube Music | Spotify"}
+
+    album = AlbumDetailRecord(
+        id=549, artist_id=475, artist_name="The XCERTS",
+        title="I think I want to go home now.",
+        album_stream_url="https://open.spotify.com/album/11vZ8gOVgAq5Txx9Eo76hl",
+        album_external_url=youtube_url,
+        created_at="2026-01-01", updated_at="2026-01-01",
+    )
+    result = importer.AlbumWriteupGenerator(FakeClient()).generate_album_writeup(
+        album, language="en", model="gpt-5",
+    )
+    expected = youtube_url or (
+        "https://music.youtube.com/search?q=The+XCERTS+I+think+I+want+to+go+home+now."
+    )
+    assert expected in captured["prompt"]
+    assert f"[YouTube Music]({expected})" in result
+    assert f"[Spotify]({album.album_stream_url})" in result
 
 
 def test_album_writeup_links_spotify_search_when_exact_album_url_is_unknown(monkeypatch) -> None:
@@ -1114,6 +1145,19 @@ def test_wikipedia_artist_draft_adds_usa_for_city_state_origin(monkeypatch) -> N
     assert draft.origin == "USA, Hattiesburg, Mississippi"
 
 
+@pytest.mark.parametrize("comment", ["early", "EARLY", "early work"])
+def test_imported_genres_skip_early_comments(comment) -> None:
+    assert importer._normalize_imported_genre(
+        f"Alternative Rock / Indie Rock / Power Pop / Post-Hardcore ({comment})"
+    ) == "Alternative Rock / Indie Rock / Power Pop"
+    assert importer._normalize_wikipedia_genres_from_html(
+        f"<ul><li>Alternative rock</li><li>Indie rock</li><li>Power pop</li>"
+        f"<li>Post-hardcore <small>({comment})</small><sup>[1]</sup></li></ul>"
+    ) == "Alternative Rock / Indie Rock / Power Pop"
+    assert importer._normalize_imported_genre(f"Post-Hardcore ({comment})") is None
+    assert importer._normalize_imported_genre("Early Music / Rock (later)") == "Early Music / Rock (later)"
+
+
 def test_wikipedia_artist_draft_formats_genre_list(monkeypatch) -> None:
     html = """
     <html>
@@ -1376,6 +1420,81 @@ def test_ytm_album_draft_uses_ytm_page_tracks_not_playlist_page(monkeypatch) -> 
     assert draft.tracks[7].duration_seconds == 728
     # Total duration should be sum of all tracks
     assert draft.duration_seconds == sum(t.duration_seconds for t in draft.tracks if t.duration_seconds)
+
+
+def test_ytm_curl_fallback_preserves_late_metadata_and_reuses_page(monkeypatch) -> None:
+    import json
+    import subprocess
+    from urllib.error import URLError
+
+    data = {"header": {"subtitle": {"runs": [
+        {"text": "Album"}, {"text": " • "}, {"text": "2026"},
+    ]}}, "contents": [{"musicResponsiveListItemRenderer": {
+        "flexColumns": [{"musicResponsiveListItemFlexColumnRenderer": {
+            "text": {"runs": [{"text": "Resistance"}]},
+        }}],
+        "fixedColumns": [{"musicResponsiveListItemFixedColumnRenderer": {
+            "text": {"runs": [{"text": "5:02"}]},
+        }}],
+    }}]}
+    encoded = "".join(f"\\x{byte:02x}" for byte in json.dumps(data).encode())
+    html = ('<html><head><script>' + 'x' * 90_000 + '</script>'
+            + '<meta property="og:title" content="Latent">'
+            + '<meta property="og:description" content="Album • Einvigi">'
+            + '<meta property="og:image" content="https://example.com/cover.jpg">'
+            + f"</head><script>initialData.push({{data: '{encoded}'}});</script></html>")
+    monkeypatch.setattr(importer, "_validate_source_url", lambda url: None)
+
+    def fail_urllib(url):
+        raise URLError("connection failed")
+
+    calls = []
+
+    def curl(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout=html)
+
+    monkeypatch.setattr(importer, "_fetch_with_urllib", fail_urllib)
+    monkeypatch.setattr(importer.subprocess, "run", curl)
+    draft = importer.SourceMetadataImporter().create_album_draft(
+        ImportRequest(source_url="https://music.youtube.com/playlist?list=OLAK5uy_lgSZm2091sEvuJKzjV_5Oy9Y4in5yTMVI&si=kHnCXJo-wwKtzhsI"),
+        model="unused",
+    )
+    assert draft.album_title == "Latent"
+    assert draft.artist_name == "Einvigi"
+    assert draft.release_year == 2026
+    assert draft.tracks[0].title == "Resistance"
+    assert draft.duration_seconds == 302
+    assert draft.cover_source_url == "https://example.com/cover.jpg"
+    assert len(calls) == 1
+
+
+def test_ytm_recovers_metadata_from_second_fetch(monkeypatch) -> None:
+    monkeypatch.setattr(importer, "_page_metadata", lambda url: {})
+    monkeypatch.setattr(importer, "_fetch_ytm_full_page", lambda url: (
+        '<meta property="og:title" content="Latent">'
+        '<meta property="og:description" content="Album • Einvigi">'
+        '<meta property="og:image" content="https://example.com/cover.jpg">'
+    ))
+    monkeypatch.setattr(importer, "_extract_yt_playlist_tracks", lambda pid: [])
+    draft = importer.SourceMetadataImporter().create_album_draft(
+        ImportRequest(source_url="https://music.youtube.com/playlist?list=album"), model="unused",
+    )
+    assert draft.album_title == "Latent"
+    assert draft.artist_name == "Einvigi"
+    assert draft.cover_source_url == "https://example.com/cover.jpg"
+
+
+def test_ytm_failed_fetch_does_not_return_empty_draft(monkeypatch) -> None:
+    monkeypatch.setattr(importer, "_page_metadata", lambda url: {})
+    monkeypatch.setattr(importer, "_fetch_ytm_full_page", lambda url: "")
+    monkeypatch.setattr(importer, "_extract_yt_playlist_tracks", lambda pid: [])
+    source = importer.SourceMetadataImporter()
+    with pytest.raises(ValueError, match="YouTube Music did not return album metadata"):
+        source.create_album_draft(
+            ImportRequest(source_url="https://music.youtube.com/playlist?list=unavailable"), model="unused",
+        )
+    assert source.last_request_failed
 
 
 def test_ytm_album_draft_extracts_artist_from_current_metadata_shape(monkeypatch) -> None:
@@ -1929,3 +2048,278 @@ def test_alterportal_artist_draft_normalizes_england_origin_to_uk(monkeypatch) -
     )
 
     assert draft.origin == "UK, London"
+
+
+@pytest.mark.parametrize('path', ['album', 'intl-de/album', 'embed/album'])
+def test_spotify_album_import_from_embed(monkeypatch, path) -> None:
+    from pathlib import Path
+
+    html = (Path(__file__).parent / 'fixtures/spotify_album_embed.html').read_text()
+    monkeypatch.setattr(importer, '_fetch_url_document', lambda url: (html if '/embed/' in url else '', 'text/html'))
+    source = f'https://open.spotify.com/{path}/3hHJYONrtR5FxTrOe78qNL?si=shared'
+    draft = importer.SourceMetadataImporter().create_album_draft(ImportRequest(source_url=source), model='unused')
+    assert draft.artist_name == 'Arab Strap'
+    assert draft.album_title == 'Half-Told Tales'
+    assert len(draft.tracks) == 14
+    assert draft.tracks[0].duration_seconds == 203
+    assert draft.tracks[-1].title == 'Beats Per Minute'
+    assert draft.duration_seconds == sum(t.duration_seconds for t in draft.tracks)
+    assert draft.album_stream_url == 'https://open.spotify.com/album/3hHJYONrtR5FxTrOe78qNL'
+    assert importer._normalize_cover_source_url(draft.cover_source_url, source) == draft.cover_source_url
+    assert '0000b273' in draft.cover_source_url
+    artist = importer._best_effort_artist_draft(ImportRequest(source_url=source))
+    assert artist.artist_name == 'Arab Strap'
+    assert artist.description is None
+
+
+def test_spotify_album_uses_metadata_when_embed_unavailable(monkeypatch) -> None:
+    html = '<meta property="og:title" content="Half-Told Tales - Album by Arab Strap | Spotify"><meta property="og:description" content="Arab Strap · Album · 2025 · 14 songs.">'
+    monkeypatch.setattr(importer, '_fetch_url_document', lambda url: ('<script id="__NEXT_DATA__">broken</script>' if '/embed/' in url else html, 'text/html'))
+    draft = importer._best_effort_album_draft(ImportRequest(source_url='https://open.spotify.com/album/abc'))
+    assert draft.artist_name == 'Arab Strap'
+    assert draft.album_title == 'Half-Told Tales'
+    assert draft.release_year == 2025
+    assert draft.album_type == 'Full-length'
+    assert draft.tracks == []
+    assert 'Spotify tracklist unavailable' in draft.notes
+
+
+@pytest.mark.parametrize('initial_embed', ['', '<script id="__NEXT_DATA__">broken</script>'])
+def test_spotify_album_retries_missing_tracklist(monkeypatch, initial_embed) -> None:
+    from pathlib import Path
+
+    embed = (Path(__file__).parent / 'fixtures/spotify_deafheaven_embed.html').read_text()
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        if 'utm_source=oembed' in url:
+            return embed, 'text/html'
+        if '/embed/' in url:
+            return initial_embed, 'text/html'
+        return '<meta property="og:title" content="At Work In The Fields Of The Bomb - EP by Deafheaven | Spotify">', 'text/html'
+
+    monkeypatch.setattr(importer, '_fetch_url_document', fetch)
+    draft = importer.SourceMetadataImporter().create_album_draft(
+        ImportRequest(source_url='https://open.spotify.com/album/7tIVbLtTqWrlTnoPiLLA1R?si=shared'), model='unused'
+    )
+    assert [track.title for track in draft.tracks] == ['Hunter', 'Three Princes', 'Sorry Laid The Hearth']
+    assert [track.duration_seconds for track in draft.tracks] == [436, 175, 767]
+    assert draft.duration_seconds == 1378
+    assert draft.notes is None
+    assert calls[-1].endswith('?utm_source=oembed')
+
+
+def test_spotify_album_unavailable_raises(monkeypatch) -> None:
+    monkeypatch.setattr(importer, '_fetch_url_document', lambda url: ('<title>Spotify</title>', 'text/html'))
+    with pytest.raises(ValueError, match='Could not read Spotify album metadata'):
+        importer._best_effort_album_draft(ImportRequest(source_url='https://open.spotify.com/album/abc'))
+
+
+@pytest.mark.parametrize('metadata_description', [False, True])
+def test_artist_description_has_no_spaces_before_punctuation(monkeypatch, metadata_description) -> None:
+    description = (
+        'Arab Strap are a Scottish indie rock band whose core members are '
+        '<a>Aidan Moffat</a> and <a>Malcolm Middleton</a>.<sup>[1]</sup> '
+        'The band were signed to independent record label <a>Chemikal Underground</a>, '
+        'split in 2006 and reformed in 2016. '
+        'The band signed to <a>Rock Action Records</a>&nbsp;[2] in 2020.'
+    )
+    if metadata_description:
+        html = '<meta name="description" content="Arab Strap are a Scottish indie rock band . They signed to Chemikal Underground , then Rock Action Records .">'
+        expected = 'Arab Strap are a Scottish indie rock band. They signed to Chemikal Underground, then Rock Action Records.'
+    else:
+        html = '<body><p>' + description + '</p></body>'
+        expected = (
+            'Arab Strap are a Scottish indie rock band whose core members are Aidan Moffat and Malcolm Middleton. '
+            'The band were signed to independent record label Chemikal Underground, split in 2006 and reformed in 2016. '
+            'The band signed to Rock Action Records in 2020.'
+        )
+    monkeypatch.setattr(importer, '_fetch_url_document', lambda url: (html, 'text/html'))
+    draft = importer.SourceMetadataImporter().create_artist_draft(
+        ImportRequest(artist_name='Arab Strap', source_url='https://en.wikipedia.org/wiki/Arab_Strap'), model='unused'
+    )
+    assert draft.description == expected
+
+
+def test_wikipedia_citation_removal_preserves_punctuation_spacing() -> None:
+    assert importer._clean_wikipedia_text('A band [1], formed in 1996 [ 2 ].') == 'A band, formed in 1996.'
+
+
+@pytest.mark.parametrize('date_attribute', ['name', 'property'])
+def test_spotify_shared_album_year_from_canonical_release_date(monkeypatch, date_attribute) -> None:
+    from pathlib import Path
+
+    embed = (Path(__file__).parent / 'fixtures/spotify_album_embed.html').read_text()
+    canonical = 'https://open.spotify.com/album/3hHJYONrtR5FxTrOe78qNL'
+    def fetch(url):
+        if '/embed/' in url:
+            return embed, 'text/html'
+        if url == canonical:
+            return f'<meta {date_attribute}="music:release_date" content="2026-09-04">', 'text/html'
+        return '<title>Spotify</title>', 'text/html'
+    monkeypatch.setattr(importer, '_fetch_url_document', fetch)
+    draft = importer.SourceMetadataImporter().create_album_draft(
+        ImportRequest(source_url=canonical + '?si=shared'), model='unused'
+    )
+    assert draft.release_year == 2026
+    assert len(draft.tracks) == 14
+
+
+def test_spotify_year_does_not_use_numbers_in_artist_name(monkeypatch) -> None:
+    html = '<meta property="og:title" content="Example - Album by The 1975 | Spotify"><meta property="og:description" content="The 1975 · Album · 2026 · 14 songs">'
+    monkeypatch.setattr(importer, '_fetch_url_document', lambda url: (html, 'text/html'))
+    draft = importer._best_effort_album_draft(ImportRequest(source_url='https://open.spotify.com/album/abc'))
+    assert draft.release_year == 2026
+
+
+def test_spotify_album_fetch_requests_public_preview_metadata(monkeypatch) -> None:
+    monkeypatch.setattr(importer, '_validate_source_url', lambda url: None)
+    calls = []
+    def fetch(url, user_agent):
+        calls.append((url, user_agent))
+        return '<meta name="music:release_date" content="2026-09-04">', 'text/html'
+    monkeypatch.setattr(importer, '_fetch_with_curl_ua', fetch)
+    monkeypatch.setattr(importer, '_fetch_with_urllib', lambda url: pytest.fail('Browser page omits release metadata'))
+    metadata = importer._page_metadata('https://open.spotify.com/intl-de/album/abc?si=shared')
+    assert calls == [('https://open.spotify.com/album/abc', 'Twitterbot/1.0')]
+    assert '2026-09-04' in metadata['html']
+
+
+def test_album_description_generator_researches_release_and_filters_sources(monkeypatch) -> None:
+    monkeypatch.setattr(importer, "_fetch_url_excerpt", lambda url: "Recorded in Helsinki.")
+    captured = {}
+
+    class FakeClient:
+        def generate_json_with_web_search(self, **kwargs):
+            captured.update(kwargs)
+            return {"description": "A black metal album.", "sources": [
+                {"title": "Label", "url": "https://example.com/album"},
+                {"title": "Bad", "url": "javascript:alert(1)"},
+            ]}, [{"title": "Label", "url": "https://example.com/album"}]
+
+    generator = importer.AlbumWriteupGenerator(FakeClient())
+    description, sources = generator.generate_album_description(
+        "Band", album_title="Album", release_year=2026, origin=None, genre="Black Metal",
+        source_url="https://example.com/album", model="selected-model",
+    )
+    assert description == "A Black Metal album."
+    assert sources == [{"title": "Label", "url": "https://example.com/album"}]
+    assert captured["model"] == "selected-model"
+    assert captured["schema_name"] == "album_description"
+    assert "not an artist biography" in captured["user_prompt"]
+    assert "Album: Album" in captured["user_prompt"]
+    assert "Release year: 2026" in captured["user_prompt"]
+    assert "Recorded in Helsinki." in captured["user_prompt"]
+
+
+def test_album_description_generator_rejects_empty_result() -> None:
+    class FakeClient:
+        def generate_json_with_web_search(self, **kwargs):
+            return {"description": " ", "sources": []}, []
+
+    with pytest.raises(importer.AIClientError, match="empty album description"):
+        importer.AlbumWriteupGenerator(FakeClient()).generate_album_description(
+            "Band", album_title="Album", release_year=None, origin=None, genre=None,
+            source_url=None, model="selected-model",
+        )
+
+
+@pytest.mark.parametrize("language", ["en", "ru"])
+@pytest.mark.parametrize("limited", [True, False])
+def test_writeup_telegram_limit_enforced_after_listening_links(monkeypatch, language, limited) -> None:
+    monkeypatch.setattr(importer, "_fetch_url_excerpt", lambda url: "")
+    monkeypatch.setattr(importer, "_find_spotify_album_url", lambda *args: None)
+    captured = {}
+    original = "Band — Album\n\n" + "Музыка 🎶 with detail. " * 400
+
+    class FakeClient:
+        def generate_json_with_web_search(self, **kwargs):
+            captured["prompt"] = kwargs["user_prompt"]
+            return {"overview": original + "\n\nTracklist:\n1. Unwanted track\n2. Another track", "sources": []}, []
+
+    generator = importer.AlbumWriteupGenerator(FakeClient())
+    album = AlbumDetailRecord(
+        id=1, artist_id=1, artist_name="Band", title="Album",
+        album_stream_url="https://music.youtube.com/playlist?list=test",
+        created_at="2026-01-01T00:00:00+00:00", updated_at="2026-01-01T00:00:00+00:00",
+    )
+    kwargs = {} if limited else {"limit_for_telegram": False}
+    result = generator.generate_album_writeup(album, language=language, model="gpt-5", **kwargs)
+    assert (len(result.encode("utf-16-le")) // 2 <= 4096) is limited
+    assert ("entire post must fit within 4096" in captured["prompt"]) is limited
+    assert "[YouTube Music](https://music.youtube.com/playlist?list=test)" in result
+    assert "[Spotify](https://open.spotify.com/search/" in result
+    assert result.startswith("Band — Album")
+    assert "Tracklist:" not in result
+    assert "Unwanted track" not in result
+    assert "Never include a tracklist" in captured["prompt"]
+    assert "STRICT FORMAT" in captured["prompt"]
+    if not limited:
+        assert result.startswith(original.rstrip())
+
+
+def test_telegram_limit_leaves_short_writeup_unchanged() -> None:
+    text = "Band — Album\n\nShort description.\n\n🎧 Listen:\n[Spotify](https://example.com)"
+    assert importer._limit_telegram_writeup(text) == text
+
+
+@pytest.mark.parametrize("heading", ["Tracklist:", "## Track listing", "**Tracks:**", "🎶 Трек-лист:", "Список композиций:"])
+def test_writeup_removes_tracklist_but_keeps_ratings_and_listen(heading) -> None:
+    before = "🎸 Album: Band — Album\n\n📌 Description:\nThe song First is a highlight."
+    after = "⭐ User ratings:\nRYM: 4/5 (100 ratings)\n\n🎧 Listen:\n[Spotify](https://example.com)"
+    draft = f"{before}\n\n{heading}\n1. First 3:00\n2. Second 4:00\n\n{after}"
+    assert importer._clean_writeup_format(draft) == f"{before}\n\n{after}"
+
+
+@pytest.mark.parametrize("extra", ["Tracklist:\n- First\n- Second", "1. First 3:00\n2. Second 4:00", "Bonus tracks:\nUnwanted outro"])
+def test_writeup_listen_is_last_section(extra) -> None:
+    expected = "📌 Description:\nAlbum prose.\n\n🎧 Слушать:\n[Spotify](https://example.com)"
+    assert importer._clean_writeup_format(f"{expected}\n\n{extra}") == expected
+
+
+def test_writeup_removes_bare_numbered_tracklist_without_listen() -> None:
+    draft = "📌 Description:\nAlbum prose.\n\n1. First\n2. Second\n"
+    assert importer._clean_writeup_format(draft) == "📌 Description:\nAlbum prose."
+
+
+def test_artist_bio_returns_album_era_genre_even_when_prose_omits_it(monkeypatch):
+    monkeypatch.setattr(importer, "_fetch_url_excerpt", lambda url: "")
+    captured = {}
+
+    class FakeClient:
+        def generate_json_with_web_search(self, **kwargs):
+            captured.update(kwargs)
+            return {"description": "A band whose sound changed over time.",
+                    "genre": "Death Metal", "origin": "Hobart, Tasmania, Australia", "origin_country": "Australia", "sources": []}, []
+
+    generator = importer.AlbumWriteupGenerator(FakeClient())
+    description = generator.generate_artist_description(
+        "Changing Band", origin=None, album_title="Early Album", release_year=1992,
+        genre="Progressive Rock", source_url=None, model="test",
+    )
+    assert generator.last_artist_description_genre == "Death Metal"
+    assert generator.last_artist_description_origin == "Australia, Hobart, Tasmania"
+    assert "origin" in captured["schema"]["required"]
+    assert "Death Metal" in description
+    assert "Early Album" in description
+    assert "Album release year: 1992" in captured["user_prompt"]
+    assert "not the artist's current or best-known style" in captured["user_prompt"]
+    assert "original release era rather than a reissue date" in captured["user_prompt"]
+    assert "genre" in captured["schema"]["required"]
+
+
+def test_ytm_retries_shell_with_initial_data_but_no_album_metadata(monkeypatch):
+    import json
+    from pathlib import Path
+    data = json.loads((Path(__file__).parent / "fixtures" / "ytm_in_throes_album.json").read_text())
+    shell = "initialData.push({data: '" + json.dumps({"guide": {}}) + "'});"
+    full = "initialData.push({data: '" + json.dumps(data) + "'});"
+    monkeypatch.setattr(importer, "_fetch_ytm_full_page", lambda url: full)
+    draft = importer._youtube_music_album_draft(
+        ImportRequest(source_url="https://music.youtube.com/playlist?list=OLAK5uy_mgdC0vetcaMyZCUjWD7NvR1A9l-hde8qA"),
+        shell, {"title": "Sink Towards the Light", "description": "Album • In Throes"},
+    )
+    assert draft.release_year == 2026
+    assert len(draft.tracks) == 7
+    assert draft.duration_seconds == 2507

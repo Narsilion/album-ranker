@@ -298,6 +298,7 @@ class SettingsRecord(BaseModel):
     host: str
     port: int
     theme: str = "dark"
+    background: str = "none"
     ai_provider: str = "openai"
     github_token_configured: bool = False
 
@@ -306,6 +307,7 @@ class SettingsUpdateRequest(BaseModel):
     writeup_model: str | None = None
     active_model: str | None = None
     theme: str = "dark"
+    background: str | None = None
     ai_provider: str | None = None
 
     @property
@@ -321,6 +323,7 @@ class ImportRequest(BaseModel):
 
 
 class ArtistDescriptionDraftRequest(BaseModel):
+    release_year: int | None = Field(default=None, ge=1000, le=9999)
     artist_name: str = Field(max_length=SHORT_TEXT_MAX)
     origin: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
     album_title: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
@@ -344,8 +347,24 @@ class ArtistDescriptionSource(BaseModel):
 
 
 class ArtistDescriptionDraftResponse(BaseModel):
+    origin: str | None = None
+    genre: str | None = None
     description: str
     sources: list[ArtistDescriptionSource] = Field(default_factory=list)
+
+
+class AlbumDescriptionDraftRequest(ArtistDescriptionDraftRequest):
+    album_title: str = Field(max_length=SHORT_TEXT_MAX)
+    release_year: int | None = Field(default=None, ge=1000, le=9999)
+
+    @field_validator("album_title")
+    @classmethod
+    def album_title_required(cls, value: str) -> str:
+        return _require_text(value, "Album title")
+
+
+class AlbumDescriptionDraftResponse(ArtistDescriptionDraftResponse):
+    pass
 
 
 class RefreshAlbumRequest(BaseModel):
@@ -448,6 +467,7 @@ class HealthResponse(BaseModel):
 
 class WriteupDraftRequest(BaseModel):
     language: Literal["en", "ru"]
+    limit_for_telegram: bool = True
 
 
 class WriteupDraftResponse(BaseModel):

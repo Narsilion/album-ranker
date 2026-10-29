@@ -406,7 +406,7 @@ All-caps album titles and track titles are automatically title-cased by `_fix_al
 
 ### 5.5 AI Write-up Generation
 
-Album overviews can be generated post-import via `POST /api/albums/{id}/write-up/draft`. The AI receives the album's full metadata (title, artist, genre, year, tracklist, existing notes) and returns a plain-text write-up. The user reviews the draft in the Album Detail page and saves or discards it. The saved text is stored in `albums.overview`.
+Album overviews can be generated post-import via `POST /api/albums/{id}/write-up/draft`. The AI receives the album's full metadata (title, artist, genre, year, tracklist, existing notes) and returns a plain-text write-up. The generator has a checked-by-default Telegram size option (`limit_for_telegram`, default `true`), which bounds the generated draft to 4,096 characters while retaining listening links. Uncheck it to generate longer write-ups. Posts follow fixed section order with one description paragraph, optional verified ratings, and listening links last. Tracklists are excluded from the prompt context and removed from generated drafts. The user reviews the draft in the Album Detail page and saves or discards it. The saved text is stored in `albums.overview`.
 
 ---
 
@@ -458,7 +458,7 @@ All endpoints are under the FastAPI app. HTML pages are served at `/`, `/artists
 | PATCH | `/api/albums/{id}/listened` | Toggle listened status (`{ "listened": true/false }`) |
 | POST | `/api/albums/{id}/cover` | Upload cover image (multipart) |
 | POST | `/api/albums/{id}/refresh` | Re-fetch metadata from album's external URL (or supplied URL); updates in place |
-| POST | `/api/albums/{id}/write-up/draft` | Generate AI write-up draft (`{ "language": "en" \| "ru" }`) |
+| POST | `/api/albums/{id}/write-up/draft` | Generate AI write-up draft (`{ "language": "en" \| "ru", "limit_for_telegram": true }`) |
 | POST | `/api/albums/{id}/overview/draft` | Alias for write-up/draft (compatibility) |
 | PATCH | `/api/albums/{id}/write-up` | Save (or clear) write-up text to `overview` column |
 | PATCH | `/api/albums/{id}/overview` | Alias for write-up (compatibility) |

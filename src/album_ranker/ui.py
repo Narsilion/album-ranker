@@ -92,8 +92,9 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         for label, href, item_active in navigation
     )
     _theme = (page_state.get("settings") or {}).get("theme", "dark") or "dark"
+    _background = (page_state.get("settings") or {}).get("background", "none") or "none"
     return f"""<!doctype html>
-<html lang="en" data-theme="{_escape(_theme)}">
+<html lang="en" data-theme="{_escape(_theme)}" data-background="{_escape(_background)}">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -163,6 +164,26 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         color: var(--ink);
         font-family: "Avenir Next", "Helvetica Neue", sans-serif;
         background: var(--body-bg);
+      }}
+      body::before {{
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: -1;
+      }}
+      html[data-background="midnight-mist"] body,
+      html[data-background="hollow-kingdom"] body {{
+        background: var(--bg);
+        isolation: isolate;
+      }}
+      html[data-background="midnight-mist"] body::before {{
+        background: linear-gradient(rgba(3, 9, 15, 0.22), rgba(3, 9, 15, 0.42)),
+          url("/static/backgrounds/midnight-mist.png") center / cover no-repeat;
+      }}
+      html[data-background="hollow-kingdom"] body::before {{
+        background: linear-gradient(rgba(8, 10, 6, 0.22), rgba(8, 10, 6, 0.42)),
+          url("/static/backgrounds/hollow-kingdom.png") center / cover no-repeat;
       }}
       a {{ color: inherit; }}
       .app {{
@@ -466,6 +487,9 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         text-decoration: none;
         font-size: 15px;
         background: rgba(255, 255, 255, 0.07);
+      }}
+      .icon-action[aria-expanded="true"] svg {{
+        transform: rotate(180deg);
       }}
       button.danger {{
         background: rgba(219, 90, 99, 0.14);
@@ -975,6 +999,71 @@ def _shell(title: str, active: str, body: str, *, page_state: dict[str, object])
         justify-content: space-between;
         gap: 12px;
         margin-bottom: 14px;
+      }}
+      .writeup-toolbar {{
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px 20px;
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.025);
+      }}
+      .writeup-options {{
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px 24px;
+        min-width: 0;
+      }}
+      .writeup-language {{
+        margin: 0;
+        padding: 0;
+        border: 0;
+        min-width: 0;
+      }}
+      .writeup-language legend {{
+        padding: 0;
+        color: var(--muted);
+        font-size: 12px;
+      }}
+      .writeup-language-choices {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }}
+      .writeup-options label {{
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 36px;
+        font-size: 13px;
+        cursor: pointer;
+      }}
+      .writeup-options input[type="radio"],
+      .writeup-options input[type="checkbox"] {{
+        width: 16px;
+        height: 16px;
+        margin: 0;
+        padding: 0;
+        flex: 0 0 16px;
+        accent-color: var(--accent);
+      }}
+      .writeup-limit small {{
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+      }}
+      .writeup-actions {{
+        display: flex;
+        gap: 8px;
+        margin-left: auto;
+      }}
+      .writeup-actions button {{
+        font-size: 13px;
       }}
       .icon-button {{
         display: inline-flex;
@@ -1804,7 +1893,7 @@ def _album_card_markup(
         </div>
         <a class="album-title album-card-link" href="/albums/{album.id}">{_escape(album.title)}{_escape(year_str)}</a>
         {f'<div class="album-type muted">{_escape(album.album_type)}</div>' if album.album_type else ''}
-        {f'<div class="album-subtitle">{_escape(artist_line)}</div>' if artist_line else ''}
+        {f'<div class="album-subtitle"><a href="/artists/{album.artist_id}">{_escape(artist_line)}</a></div>' if artist_line else ''}
         <div class="album-genre">{_escape(genre_line)}</div>
         {rating_widget}
         {note_area}
@@ -2150,6 +2239,7 @@ def render_artists_page(
                 source_url: validateUrl(sourceUrl, "Artist page URL"),
               }}),
             }});
+            if (result.origin && target.form?.origin) target.form.origin.value = result.origin;
             showArtistDescriptionResult(target, status, result);
           }} catch (error) {{
             status.textContent = error.message || "AI description generation failed.";
@@ -2563,7 +2653,9 @@ def render_artist_detail_page(
       <section class="panel" style="margin-top:20px;">
         <div class="detail-head">
           <div class="panel-title" style="margin-bottom:0;">Album Import</div>
-          <button type="button" id="artistAlbumToolsToggle" class="secondary" title="Toggle album import" aria-controls="artistAlbumToolsPanel" aria-expanded="false">Show Import</button>
+          <button type="button" id="artistAlbumToolsToggle" class="secondary icon-action" title="Expand album import" aria-label="Expand album import" aria-controls="artistAlbumToolsPanel" aria-expanded="false">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
         </div>
         <div id="artistAlbumToolsPanel" class="hidden">
         <div class="row" role="tablist" aria-label="Album import mode" style="margin-bottom:16px; gap:8px;">
@@ -2776,6 +2868,7 @@ def render_artist_detail_page(
                   source_url: validateUrl(form.external_url.value, "External URL"),
                 }}),
               }});
+              if (result.origin) form.origin.value = result.origin;
               showArtistDescriptionResult(form.description, status, result);
               form.description.focus();
             }} catch (err) {{
@@ -2896,6 +2989,7 @@ def render_artist_detail_page(
                     source_url: validateUrl(artistRefreshForm.external_url.value, "External URL"),
                   }}),
                 }});
+                if (result.origin) artistRefreshForm.origin.value = result.origin;
                 showArtistDescriptionResult(artistRefreshForm.description, applyStatus, result);
               }} catch (err) {{
                 applyStatus.textContent = err.message || "AI description generation failed.";
@@ -2938,7 +3032,9 @@ def render_artist_detail_page(
         const artistAlbumImportStatus = document.getElementById("artistAlbumImportStatus");
         function syncArtistAlbumToolsToggle() {{
           const isOpen = !artistAlbumToolsPanel.classList.contains("hidden");
-          artistAlbumToolsToggle.textContent = isOpen ? "Hide Import" : "Show Import";
+          const label = isOpen ? "Collapse album import" : "Expand album import";
+          artistAlbumToolsToggle.setAttribute("aria-label", label);
+          artistAlbumToolsToggle.title = label;
           artistAlbumToolsToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
         }}
         artistAlbumToolsToggle.addEventListener("click", () => {{
@@ -3276,7 +3372,11 @@ def render_imports_page(settings: SettingsRecord) -> str:
         let importAbortCtrl = null;
         const setValue = (id, value) => {
           const el = document.getElementById(id);
-          if (el) el.value = value ?? "";
+          if (el) {
+            el.value = value ?? "";
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+          }
         };
         const value = (id) => (document.getElementById(id)?.value || "").trim();
         function setArtistDraftEnabled(enabled) {
@@ -3304,11 +3404,40 @@ def render_imports_page(settings: SettingsRecord) -> str:
                 artist_name: value("bundleArtistName"),
                 origin: value("bundleArtistOrigin") || null,
                 album_title: value("bundleAlbumTitle") || null,
+                release_year: Number(value("bundleAlbumYear")) || null,
                 genre: value("bundleAlbumGenre") || null,
-                source_url: validateUrl(value("bundleArtistExternalUrl"), "Artist page URL"),
+                source_url: validateUrl(value("bundleAlbumExternalUrl") || value("bundleArtistExternalUrl"), "Source URL"),
               }),
             });
+            if (result.genre) setValue("bundleAlbumGenre", result.genre);
+            if (result.origin) setValue("bundleArtistOrigin", result.origin);
             showArtistDescriptionResult(document.getElementById("bundleArtistDescription"), confirmStatus, result);
+            let albumMetadataError = "";
+            if ((!value("bundleAlbumYear") || !value("bundleAlbumDuration")) && value("bundleAlbumExternalUrl")) {
+              try {
+                const refreshed = await fetchJson("/api/import/album", {
+                  method: "POST",
+                  body: JSON.stringify({
+                    artist_name: value("bundleArtistName"),
+                    album_title: value("bundleAlbumTitle") || null,
+                    source_url: validateUrl(value("bundleAlbumExternalUrl"), "Album source URL"),
+                  }),
+                });
+                const albumMetadata = refreshed.draft.draft_payload || {};
+                if (!value("bundleAlbumYear") && albumMetadata.release_year)
+                  setValue("bundleAlbumYear", albumMetadata.release_year);
+                if (!value("bundleAlbumDuration") && albumMetadata.duration_seconds)
+                  setValue("bundleAlbumDuration", formatDuration(albumMetadata.duration_seconds));
+              } catch (error) {
+                albumMetadataError = " Album metadata could not be refreshed: " + error.message;
+              }
+            }
+            const metadataSummary = document.createElement("span");
+            metadataSummary.textContent = " Fields filled — Genre: " + (value("bundleAlbumGenre") || "not verified")
+              + "; Origin: " + (value("bundleArtistOrigin") || "not verified")
+              + "; Year: " + (value("bundleAlbumYear") || "not available")
+              + "; Length: " + (value("bundleAlbumDuration") || "not available") + "." + albumMetadataError;
+            confirmStatus.appendChild(metadataSummary);
           } catch (error) {
             confirmStatus.textContent = error.message || "AI description generation failed.";
           } finally {
@@ -3828,11 +3957,9 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               </div>
               <div class="form-field">
                 <label class="form-label" for="albumEditDescription">Album Description</label>
-                <textarea id="albumEditDescription" name="artist_description" placeholder="Album description">{_escape(album.artist_description)}</textarea>
-              </div>
-              <div class="form-field">
-                <label class="form-label" for="albumEditNotes">Notes</label>
-                <textarea id="albumEditNotes" name="notes" placeholder="Notes">{_escape(album.notes)}</textarea>
+                <textarea id="albumEditDescription" name="notes" placeholder="Album description">{_escape(album.notes)}</textarea>
+                <button type="button" class="secondary" id="albumGenerateDescription">Generate with AI</button>
+                <span class="status" id="albumDescriptionStatus"></span>
               </div>
               <div class="form-field">
                 <label class="form-label" for="albumEditTracklist">Tracklist</label>
@@ -3846,21 +3973,29 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             </form>
           </section>
           <section class="panel">
-            <div class="detail-head" style="margin-bottom:4px;">
+            <div class="detail-head">
               <div class="panel-title" style="margin-bottom:0;">Album Write-up / Telegram Post</div>
-              <div class="row" style="gap:8px; align-items:center; flex-shrink:0;">
-                {('<button type="button" id="overviewCopyBtn" class="secondary" style="flex:0 0 auto; font-size:0.85em;">Copy Write-up</button>' if album.overview else '')}
-                <button type="button" id="overviewGenerateBtn" class="secondary" style="flex:0 0 auto; font-size:0.85em;">{"✦ Regenerate" if album.overview else "✦ Generate Write-up"}</button>
-                <button type="button" id="overviewCancelBtn" class="secondary hidden" style="flex:0 0 auto; font-size:0.85em;">Cancel</button>
-              </div>
+              {('<button type="button" id="overviewCopyBtn" class="secondary" style="font-size:0.85em;">Copy Write-up</button>' if album.overview else '')}
             </div>
-            <div style="display:flex; gap:12px; align-items:center; margin-bottom:4px;">
-              <label style="font-size:0.85em; color:var(--muted); display:flex; align-items:center; gap:4px; cursor:pointer; flex:0 0 auto;">
-                <input type="radio" name="overviewLang" value="en"> English
-              </label>
-              <label style="font-size:0.85em; color:var(--muted); display:flex; align-items:center; gap:4px; cursor:pointer; flex:0 0 auto;">
-                <input type="radio" name="overviewLang" value="ru" checked> Russian
-              </label>
+            <div class="writeup-toolbar">
+              <div class="writeup-options">
+                <fieldset class="writeup-language">
+                  <legend>Language</legend>
+                  <div class="writeup-language-choices">
+                    <label><input type="radio" name="overviewLang" value="en"> English</label>
+                    <label><input type="radio" name="overviewLang" value="ru" checked> Russian</label>
+                  </div>
+                </fieldset>
+                <label class="writeup-limit">
+                  <input type="checkbox" id="overviewTelegramLimit" checked aria-describedby="overviewTelegramLimitHelp">
+                  <span>Telegram limit<small id="overviewTelegramLimitHelp">Up to 4,096 characters</small></span>
+                </label>
+              </div>
+              <div class="writeup-actions">
+                {('<button type="button" id="overviewEditBtn" class="secondary">Edit Write-up</button>' if album.overview else '')}
+                <button type="button" id="overviewGenerateBtn" class="secondary">{"✦ Regenerate" if album.overview else "✦ Generate Write-up"}</button>
+                <button type="button" id="overviewCancelBtn" class="secondary hidden">Cancel</button>
+              </div>
             </div>
             <div id="overviewProgress" style="display:none; margin:8px 0 4px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; position:relative;">
               <div style="position:absolute; height:100%; width:40%; background:var(--accent); border-radius:2px; animation:indeterminate-slide 1.4s ease-in-out infinite;"></div>
@@ -3869,9 +4004,11 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             {(f'<div id="overviewDisplay" style="white-space:pre-wrap; font-size:0.95em; line-height:1.6; margin-top:12px;">{_render_writeup(album.overview)}</div>') if album.overview else '<div id="overviewDisplay" style="display:none; white-space:pre-wrap; font-size:0.95em; line-height:1.6; margin-top:12px;"></div>'}
           </section>
           <section class="panel hidden" id="overviewDraftPanel">
-            <div class="panel-title">Review Generated Write-up</div>
+            <div class="panel-title" id="overviewDraftTitle">Review Generated Write-up</div>
             <div class="form-field">
-              <textarea id="overviewDraftText" rows="14" style="font-family:inherit; font-size:0.92em; line-height:1.6;"></textarea>
+              <label class="form-label" for="overviewDraftText">Write-up text and links</label>
+              <p class="muted" id="overviewDraftHelp">Edit any text or link here. To add a missing link, use <code>[YouTube Music](https://music.youtube.com/...)</code> or <code>[Spotify](https://open.spotify.com/album/...)</code>. To correct a link, replace the URL inside parentheses.</p>
+              <textarea id="overviewDraftText" aria-describedby="overviewDraftHelp" rows="14" style="font-family:inherit; font-size:0.92em; line-height:1.6;"></textarea>
             </div>
             <div class="row">
               <button type="button" id="overviewSaveBtn">Save Write-up</button>
@@ -4190,6 +4327,37 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
             status.textContent = error.message;
           }}
         }});
+        document.getElementById("albumGenerateDescription").addEventListener("click", async (event) => {{
+          const button = event.currentTarget;
+          const form = document.getElementById("albumDetailForm");
+          const status = document.getElementById("albumDescriptionStatus");
+          const originalLabel = button.textContent;
+          try {{
+            validateRequired(form.title.value, "Album title");
+            button.disabled = true;
+            button.textContent = "Generating...";
+            status.textContent = "Generating album description with AI...";
+            const result = await fetchJson("/api/album-description/draft", {{
+              method: "POST",
+              body: JSON.stringify({{
+                artist_name: form.artist_name.value.trim(),
+                album_title: form.title.value.trim(),
+                release_year: validateYear(form.release_year.value, "Release year"),
+                origin: form.artist_origin.value.trim() || null,
+                genre: form.genre.value.trim() || null,
+                source_url: validateUrl(form.album_external_url.value, "Album source URL"),
+              }}),
+            }});
+            form.notes.value = result.description;
+            form.notes.focus();
+            showResearchSources(status, "AI description ready for review. Click Save Changes to keep it.", result.sources);
+          }} catch (error) {{
+            status.textContent = error.message || "AI description generation failed.";
+          }} finally {{
+            button.disabled = false;
+            button.textContent = originalLabel;
+          }}
+        }});
         document.getElementById("albumDetailForm").addEventListener("submit", async (event) => {{
           event.preventDefault();
           const form = event.currentTarget;
@@ -4203,7 +4371,6 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               body: JSON.stringify({{
                 artist_name: form.artist_name.value.trim(),
                 artist_origin: form.artist_origin.value.trim() || null,
-                artist_description: form.artist_description.value.trim() || null,
                 album_external_url: validateUrl(form.album_external_url.value, "Album source URL"),
                 album_stream_url: validateUrl(form.album_stream_url.value, "Stream URL"),
                 album_type: form.album_type.value.trim() || null,
@@ -4225,6 +4392,8 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
         }});
         (function() {{
           const generateBtn = document.getElementById('overviewGenerateBtn');
+          const editBtn = document.getElementById('overviewEditBtn');
+          const draftTitle = document.getElementById('overviewDraftTitle');
           const cancelBtn = document.getElementById('overviewCancelBtn');
           const progress = document.getElementById('overviewProgress');
           const statusEl = document.getElementById('overviewStatus');
@@ -4236,8 +4405,19 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           const display = document.getElementById('overviewDisplay');
           const copyBtn = document.getElementById('overviewCopyBtn');
           const telegramWriteup = {_json(_telegram_copy_text(album.overview))};
+          const savedWriteup = {_json(album.overview or '')};
           const telegramWriteupHtml = {_json(_render_writeup(album.overview).replace(chr(10), "<br>"))};
           let abortCtrl = null;
+
+          editBtn?.addEventListener('click', () => {{
+            draftText.value = savedWriteup;
+            draftTitle.textContent = 'Edit Write-up';
+            rejectBtn.textContent = 'Cancel';
+            saveStatus.textContent = '';
+            draftPanel.classList.remove('hidden');
+            draftPanel.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+            draftText.focus({{ preventScroll: true }});
+          }});
 
           async function copyWriteup(text, richHtml) {{
             if (navigator.clipboard && window.ClipboardItem && window.isSecureContext) {{
@@ -4281,6 +4461,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           function resetGenerateUI() {{
             progress.style.display = 'none';
             generateBtn.disabled = false;
+            if (editBtn) editBtn.disabled = false;
             generateBtn.classList.remove('hidden');
             cancelBtn.classList.add('hidden');
             abortCtrl = null;
@@ -4293,6 +4474,7 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
           generateBtn.addEventListener('click', async () => {{
             const lang = document.querySelector('input[name="overviewLang"]:checked')?.value || 'ru';
             abortCtrl = new AbortController();
+            if (editBtn) editBtn.disabled = true;
             generateBtn.classList.add('hidden');
             cancelBtn.classList.remove('hidden');
             statusEl.textContent = 'Generating write-up\u2026';
@@ -4302,9 +4484,12 @@ def render_album_detail_page(settings: SettingsRecord, album: AlbumDetailRecord)
               const resp = await fetchJson('/api/albums/{album.id}/write-up/draft', {{
                 method: 'POST',
                 signal: abortCtrl.signal,
-                body: JSON.stringify({{ language: lang }}),
+                body: JSON.stringify({{ language: lang, limit_for_telegram: document.getElementById("overviewTelegramLimit").checked }}),
               }});
               draftText.value = resp.writeup || '';
+              draftTitle.textContent = 'Review Generated Write-up';
+              rejectBtn.textContent = 'Reject';
+              saveStatus.textContent = '';
               resetGenerateUI();
               showResearchSources(statusEl, 'Draft ready \u2014 review below.', resp.sources);
               draftPanel.classList.remove('hidden');
@@ -4852,11 +5037,23 @@ def render_settings_page(settings: SettingsRecord) -> str:
             </label>"""
         for t_val, t_label, t_desc in _themes
     )
+    background_options = "".join(
+        f'''<label class="background-option">
+          <input type="radio" name="background" value="{value}"{" checked" if value == settings.background else ""}>
+          <span class="background-preview {value}">{f'<img src="/static/backgrounds/{value}.png" alt="{description}" loading="lazy">' if value != "none" else ""}</span>
+          <strong>{label}</strong>
+        </label>'''
+        for value, label, description in [
+            ("none", "Theme only", ""),
+            ("midnight-mist", "Midnight Mist", "Moonlit forest and misty lake"),
+            ("hollow-kingdom", "Hollow Kingdom", "Haunted forest and ancient ruins in grey mist and moss green"),
+        ]
+    )
     body = f"""
       <section class="hero compact">
         <div class="eyebrow">Settings</div>
         <h1>Keep write-up generation optional and visible</h1>
-        <p>Choose the OpenAI model used for artist descriptions, album write-ups, and Telegram post drafts, and pick a colour theme for the interface.</p>
+        <p>Choose the OpenAI model used for artist descriptions, album write-ups, and Telegram post drafts, and pick a colour theme and background for the interface.</p>
       </section>
       <section class="grid two">
         <section class="panel">
@@ -4864,8 +5061,15 @@ def render_settings_page(settings: SettingsRecord) -> str:
           <form id="settingsForm">
             <label style="display:block;margin-bottom:4px;font-size:0.85em;color:var(--muted);">OpenAI model</label>
             <select name="writeup_model" id="writeupModelSelect">{options}</select>
+            <div class="row" style="margin-top:8px;">
+              <button type="button" class="secondary" id="refreshModelsButton">Refresh models</button>
+              <span class="status" id="modelsStatus" role="status"></span>
+            </div>
             <div class="panel-title" style="margin-top:20px;">Theme</div>
             <div class="theme-picker">{theme_options}</div>
+            <div class="panel-title" style="margin-top:20px;">Background</div>
+            <p class="muted">Choose a picture to preview it, then save your settings.</p>
+            <div class="background-picker">{background_options}</div>
             <div class="row" style="margin-top:16px;">
               <button type="submit">Save Settings</button>
               <span class="status" id="settingsStatus"></span>
@@ -4879,10 +5083,38 @@ def render_settings_page(settings: SettingsRecord) -> str:
           <p class="muted">Write-up generation status: <strong>{_escape(settings.ai_status.replace("_", " "))}</strong></p>
           {f'<p class="muted">{_escape(settings.ai_status_detail)}</p>' if settings.ai_status_detail else ''}
           <p class="muted">Server: {_escape(settings.host)}:{settings.port}</p>
-          <p class="muted">Default model: {_escape(settings.model)}</p>
         </section>
       </section>
       <style>
+        .background-picker {{
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+          gap: 12px;
+        }}
+        .background-option {{
+          display: grid;
+          gap: 8px;
+          padding: 10px;
+          border: 1px solid var(--line);
+          border-radius: 12px;
+          cursor: pointer;
+        }}
+        .background-option:has(input:checked) {{
+          border-color: var(--accent);
+          outline: 1px solid var(--accent);
+        }}
+        .background-preview {{
+          display: block;
+          aspect-ratio: 16 / 9;
+          overflow: hidden;
+          border-radius: 6px;
+          background: var(--body-bg);
+        }}
+        .background-preview img {{
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }}
         .theme-picker {{
           display: flex;
           flex-direction: column;
@@ -4929,7 +5161,29 @@ def render_settings_page(settings: SettingsRecord) -> str:
             document.documentElement.setAttribute("data-theme", el.dataset.themeValue);
           }});
         }});
+        document.querySelectorAll("input[name=background]").forEach((input) => {{
+          input.addEventListener("change", () => {{
+            document.documentElement.dataset.background = input.value;
+          }});
+        }});
         const writeupModelSelect = document.getElementById("writeupModelSelect");
+        document.getElementById("refreshModelsButton").addEventListener("click", async (event) => {{
+          const button = event.currentTarget;
+          const status = document.getElementById("modelsStatus");
+          button.disabled = true;
+          status.textContent = "Refreshing models...";
+          try {{
+            const settings = await fetchJson("/api/settings/models/refresh", {{ method: "POST" }});
+            const selected = writeupModelSelect.value;
+            writeupModelSelect.replaceChildren(...settings.available_models.map((model) => new Option(model, model)));
+            writeupModelSelect.value = settings.available_models.includes(selected) ? selected : settings.writeup_model;
+            status.textContent = "Models refreshed. Choose a model and save settings.";
+          }} catch (error) {{
+            status.textContent = error.message || "Could not refresh models.";
+          }} finally {{
+            button.disabled = false;
+          }}
+        }});
         document.getElementById("settingsForm").addEventListener("submit", async (event) => {{
           event.preventDefault();
           const form = event.currentTarget;
@@ -4943,6 +5197,7 @@ def render_settings_page(settings: SettingsRecord) -> str:
               body: JSON.stringify({{
                 writeup_model: writeupModelSelect.value,
                 theme: selectedTheme,
+                background: form.querySelector("input[name=background]:checked")?.value || "none",
                 ai_provider: "openai",
               }}),
             }});

@@ -278,6 +278,7 @@ class Database:
             host=host,
             port=port,
             theme=self.get_app_setting("theme", "dark") or "dark",
+            background=self.get_app_setting("background", "none") or "none",
             ai_provider=ai_provider,
             github_token_configured=github_token_configured,
         )
@@ -292,6 +293,10 @@ class Database:
         allowed_themes = {"dark", "dark-brown", "dark-green"}
         if payload.theme not in allowed_themes:
             raise ValueError("Invalid theme value.")
+        if payload.background not in (None, "none", "midnight-mist", "hollow-kingdom"):
+            raise ValueError("Invalid background value.")
+        if payload.background is not None:
+            self.set_app_setting("background", payload.background)
         self.set_app_setting("active_model", selected_model)
         self.set_app_setting("theme", payload.theme)
         if payload.ai_provider is not None:

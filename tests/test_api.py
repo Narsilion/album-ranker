@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import json
 import re
 from dataclasses import replace
@@ -12,6 +14,45 @@ from album_ranker.schemas import AlbumDetailRecord, AlbumDraftData, ArtistDraftD
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def test_refresh_models_updates_dropdown_validation_and_persists(settings, monkeypatch) -> None:
+    from album_ranker.openai_client import AlbumWriteupAIClient
+
+    settings = replace(settings, openai_api_key="test-key")
+    monkeypatch.setattr(AlbumWriteupAIClient, "list_models", lambda self: ["new-text-model"])
+    client = TestClient(create_app(settings))
+    active = client.get("/api/settings").json()["writeup_model"]
+    response = client.post("/api/settings/models/refresh")
+    assert response.status_code == 200
+    assert response.json()["available_models"] == [active, "new-text-model"]
+    assert response.json()["available_models_by_provider"]["openai"] == [active, "new-text-model"]
+    assert response.json()["writeup_model"] == active
+    assert 'id="refreshModelsButton"' in client.get("/settings").text
+    assert client.put("/api/settings", json={"writeup_model": "new-text-model"}).status_code == 200
+    restarted = TestClient(create_app(settings))
+    assert restarted.get("/api/settings").json()["available_models"] == [active, "new-text-model"]
+    assert restarted.get("/api/settings").json()["writeup_model"] == "new-text-model"
+
+
+@pytest.mark.parametrize("failure", ["missing_key", "api_error", "empty"])
+def test_refresh_models_failure_preserves_list(settings, monkeypatch, failure) -> None:
+    from album_ranker.openai_client import AlbumWriteupAIClient, OpenAIClientError
+
+    settings = replace(settings, openai_api_key=None if failure == "missing_key" else "test-key")
+
+    def list_models(self):
+        if failure == "api_error":
+            raise OpenAIClientError("Models service unavailable")
+        if failure == "missing_key":
+            pytest.fail("Must not call API without a key")
+        return []
+
+    monkeypatch.setattr(AlbumWriteupAIClient, "list_models", list_models)
+    client = TestClient(create_app(settings))
+    before = client.get("/api/settings").json()
+    response = client.post("/api/settings/models/refresh")
+    assert response.status_code == (400 if failure == "missing_key" else 502)
+    assert client.get("/api/settings").json() == before
 
 def _script_blocks(html: str) -> str:
     """Return concatenated content of all <script> blocks in an HTML page."""
@@ -275,7 +316,7 @@ class SparseAlbumImporter(MetadataImporter):
             genre="Gothic Metal / Rock",
         )
 
-    def generate_album_writeup(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:  # type: ignore[override]
+    def generate_album_writeup(self, album: AlbumDetailRecord, *, language: str, model: str, limit_for_telegram: bool = True) -> str:  # type: ignore[override]
         return ""
 
     def generate_album_overview(self, album: AlbumDetailRecord, *, language: str, model: str) -> str:  # type: ignore[override]
@@ -707,13 +748,15 @@ def test_refresh_routes_do_not_call_ai_for_metadata(settings, monkeypatch) -> No
     assert album_response.json()["release_year"] == 2026
 
 
-def test_writeup_draft_calls_ai_generator(settings) -> None:
+@pytest.mark.parametrize("limit_for_telegram", [None, True, False])
+def test_writeup_draft_calls_ai_generator(settings, limit_for_telegram) -> None:
     class CountingAIClient:
         def __init__(self) -> None:
             self.calls = 0
 
         def generate_json(self, **kwargs):
             self.calls += 1
+            self.prompt = kwargs["user_prompt"]
             return {"overview": "Generated write-up for Green Carnation."}
 
     ai_client = CountingAIClient()
@@ -738,17 +781,23 @@ def test_writeup_draft_calls_ai_generator(settings) -> None:
         },
     ).json()
 
-    response = local_client.post(f"/api/albums/{album['id']}/write-up/draft", json={"language": "en"})
+    payload = {"language": "en"}
+    if limit_for_telegram is not None:
+        payload["limit_for_telegram"] = limit_for_telegram
+    response = local_client.post(f"/api/albums/{album['id']}/write-up/draft", json=payload)
 
     assert response.status_code == 200
     assert response.json()["writeup"] == (
         "Generated write-up for Green Carnation.\n\n"
         "🎧 Listen:\n"
-        "YouTube Music | "
+        "[YouTube Music](https://music.youtube.com/search?q=Green+Carnation+A+Dark+Poem) | "
         "[Spotify](https://open.spotify.com/search/album%3A%22A%20Dark%20Poem%22%20"
         "artist%3A%22Green%20Carnation%22/albums)"
     )
     assert ai_client.calls == 1
+    assert ("entire post must fit within 4096" in ai_client.prompt) is (limit_for_telegram is not False)
+    page = local_client.get(f"/albums/{album['id']}")
+    assert 'id="overviewTelegramLimit" checked' in page.text
 
 
 def test_writeup_generation_status_is_derived_from_importer_state(settings) -> None:
@@ -929,6 +978,29 @@ def test_list_detail_page_has_visible_delete_action(client) -> None:
     assert 'window.location.href = "/lists"' in page.text
 
 
+def test_album_metadata_editor_edits_album_description_without_changing_artist(client) -> None:
+    album = _create_album(client, description="Artist biography")
+    payload = {
+        "artist_name": album["artist_name"],
+        "title": album["title"],
+        "notes": "Description of this album",
+        "tracks": [],
+    }
+    response = client.put(f"/api/albums/{album['id']}", json=payload)
+    assert response.status_code == 200
+    assert response.json()["artist_description"] == "Artist biography"
+    assert response.json()["notes"] == payload["notes"]
+
+    page = client.get(f"/albums/{album['id']}")
+    form = re.search(r'<form id="albumDetailForm".*?</form>', page.text, re.DOTALL).group()
+    assert '<textarea id="albumEditDescription" name="notes" placeholder="Album description">Description of this album</textarea>' in form
+    assert 'name="artist_description"' not in form
+    assert 'albumEditNotes' not in form
+    submit_script = page.text.split('document.getElementById("albumDetailForm").addEventListener("submit"', 1)[1].split('window.location.reload()', 1)[0]
+    assert 'notes: form.notes.value.trim() || null' in submit_script
+    assert 'artist_description:' not in submit_script
+
+
 def test_album_description_renders_imported_notes_on_separate_lines(client) -> None:
     response = client.post(
         "/api/albums",
@@ -1027,16 +1099,19 @@ def test_artist_description_draft_uses_model_selected_in_settings(settings) -> N
             self.request = None
 
         def generate_artist_description(  # type: ignore[override]
-            self, artist_name, *, origin, album_title, genre, source_url, model
+            self, artist_name, *, origin, album_title, genre, source_url, model, release_year=None
         ):
             self.request = {
                 "artist_name": artist_name,
                 "origin": origin,
+                "release_year": release_year,
                 "album_title": album_title,
                 "genre": genre,
                 "source_url": source_url,
                 "model": model,
             }
+            self.writeup_generator.last_artist_description_genre = "Dream Pop"
+            self.writeup_generator.last_artist_description_origin = "Belgium"
             return "A generated artist description."
 
     tracking_importer = TrackingImporter()
@@ -1053,6 +1128,7 @@ def test_artist_description_draft_uses_model_selected_in_settings(settings) -> N
         json={
             "artist_name": "The Haunted Youth",
             "origin": "Belgium",
+            "release_year": 2026,
             "album_title": "Boys Cry Too",
             "genre": "Dream Pop",
             "source_url": "https://music.youtube.com/playlist?list=test",
@@ -1061,10 +1137,11 @@ def test_artist_description_draft_uses_model_selected_in_settings(settings) -> N
 
     assert settings_response.status_code == 200
     assert response.status_code == 200
-    assert response.json() == {"description": "A generated artist description.", "sources": []}
+    assert response.json() == {"description": "A generated artist description.", "sources": [], "genre": "Dream Pop", "origin": "Belgium"}
     assert tracking_importer.request == {
         "artist_name": "The Haunted Youth",
         "origin": "Belgium",
+        "release_year": 2026,
         "album_title": "Boys Cry Too",
         "genre": "Dream Pop",
         "source_url": "https://music.youtube.com/playlist?list=test",
@@ -2756,6 +2833,25 @@ def test_save_writeup_persists_and_renders(client) -> None:
     )
     telegram_html_json = json.dumps(telegram_html, ensure_ascii=True).replace("</", "<\\/")
     assert f"const telegramWriteupHtml = {telegram_html_json};" in page.text
+    assert 'id="overviewEditBtn"' in page.text
+    assert 'aria-describedby="overviewDraftHelp"' in page.text
+    assert f"const savedWriteup = {json.dumps(writeup_text, ensure_ascii=True)};" in page.text
+    assert "draftText.value = savedWriteup;" in page.text
+
+    corrected_youtube = "https://music.youtube.com/playlist?list=corrected"
+    corrected_spotify = "https://open.spotify.com/album/corrected"
+    edited_text = (
+        "Updated description.\n\n🎧 Listen:\n"
+        f"[YouTube Music]({corrected_youtube}) | [Spotify]({corrected_spotify})"
+    )
+    edited = client.patch(f"/api/albums/{album_id}/write-up", json={"writeup": edited_text})
+    assert edited.status_code == 200
+    assert edited.json()["overview"] == edited_text
+    edited_page = client.get(f"/albums/{album_id}").text
+    assert "Updated description." in edited_page
+    assert f'href="{corrected_youtube}"' in edited_page
+    assert f'href="{corrected_spotify}"' in edited_page
+    assert youtube_url not in edited_page
 
 
 def test_save_writeup_null_clears_it(client) -> None:
@@ -2786,6 +2882,7 @@ def test_save_writeup_null_clears_it(client) -> None:
     page = client.get(f"/albums/{album_id}")
     assert page.status_code == 200
     assert "Some write-up text." not in page.text
+    assert 'id="overviewEditBtn"' not in page.text
 
 
 def test_generate_writeup_missing_album(client) -> None:
@@ -2850,3 +2947,138 @@ def test_album_detail_page_shows_track_like_buttons(client) -> None:
     page = client.get(f"/albums/{album['id']}")
     assert page.status_code == 200
     assert "track-like-btn" in page.text
+
+
+def test_spotify_album_and_artist_import(settings, monkeypatch) -> None:
+    from pathlib import Path
+    import album_ranker.importer as importer_module
+    import album_ranker.app as app_module
+
+    html = (Path(__file__).parent / 'fixtures/spotify_album_embed.html').read_text()
+    page = '<meta name="music:release_date" content="2026-09-04">'
+    monkeypatch.setattr(importer_module, '_fetch_url_document', lambda url: (html if '/embed/' in url else page, 'text/html'))
+    monkeypatch.setattr(app_module, 'wikipedia_artist_url_from_name', lambda name: None)
+    app = create_app(settings, importer=MetadataImporter(client=None), cover_downloader=CoverDownloader(settings.cover_dir))
+    local_client = TestClient(app)
+    payload = {'source_url': 'https://open.spotify.com/album/3hHJYONrtR5FxTrOe78qNL?si=shared'}
+    response = local_client.post('/api/import/album', json=payload)
+    assert response.status_code == 200
+    assert response.json()['draft']['draft_payload']['artist_name'] == 'Arab Strap'
+    assert response.json()['draft']['draft_payload']['release_year'] == 2026
+    response = local_client.post('/api/import/album-with-artist', json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body['album_draft']['draft_payload']['album_title'] == 'Half-Told Tales'
+    assert body['album_draft']['draft_payload']['release_year'] == 2026
+    assert len(body['album_draft']['draft_payload']['tracks']) == 14
+    assert body['artist_draft']['draft_payload']['artist_name'] == 'Arab Strap'
+    assert body['artist_draft']['draft_payload']['description'] is None
+
+
+def test_artist_import_description_preserves_punctuation(settings, monkeypatch) -> None:
+    import album_ranker.importer as importer_module
+
+    html = (
+        '<body><p>Arab Strap are a Scottish indie rock band whose core members are '
+        '<a>Aidan Moffat</a> and <a>Malcolm Middleton</a>.<sup>[1]</sup> '
+        'The band were signed to <a>Chemikal Underground</a>, split in 2006 and reformed in 2016.</p></body>'
+    )
+    monkeypatch.setattr(importer_module, '_fetch_url_document', lambda url: (html, 'text/html'))
+    app = create_app(settings, importer=MetadataImporter(client=None), cover_downloader=CoverDownloader(settings.cover_dir))
+    response = TestClient(app).post('/api/import/artist', json={
+        'artist_name': 'Arab Strap', 'source_url': 'https://en.wikipedia.org/wiki/Arab_Strap',
+    })
+    assert response.status_code == 200
+    assert response.json()['draft']['draft_payload']['description'] == (
+        'Arab Strap are a Scottish indie rock band whose core members are Aidan Moffat and Malcolm Middleton. '
+        'The band were signed to Chemikal Underground, split in 2006 and reformed in 2016.'
+    )
+
+
+def test_album_description_draft_uses_selected_model_and_requires_save(settings) -> None:
+    class TrackingImporter(MetadataImporter):
+        def generate_album_description(self, artist_name, **kwargs):
+            self.request = {"artist_name": artist_name, **kwargs}
+            return "Generated album description.", [{"title": "Label", "url": "https://example.com/album"}]
+
+    tracking = TrackingImporter(client=None)
+    local_client = TestClient(create_app(settings, importer=tracking, cover_downloader=CoverDownloader(settings.cover_dir)))
+    album = _create_album(local_client, description="Artist biography")
+    local_client.put("/api/settings", json={"writeup_model": "gpt-5.4-mini"})
+    payload = {"artist_name": album["artist_name"], "album_title": "Edited album title", "release_year": 2026,
+               "genre": "Black Metal", "source_url": "https://example.com/album"}
+    response = local_client.post("/api/album-description/draft", json=payload)
+    assert response.status_code == 200
+    assert response.json()["description"] == "Generated album description."
+    assert response.json()["sources"][0]["title"] == "Label"
+    assert tracking.request == {**payload, "origin": None, "model": "gpt-5.4-mini"}
+    unchanged = local_client.get(f"/api/albums/{album['id']}").json()
+    assert unchanged["notes"] is None
+    assert unchanged["artist_description"] == "Artist biography"
+    page = local_client.get(f"/albums/{album['id']}").text
+    assert 'id="albumGenerateDescription"' in page
+    assert 'fetchJson("/api/album-description/draft"' in page
+    assert 'form.notes.value = result.description' in page
+    assert local_client.post("/api/album-description/draft", json={**payload, "album_title": " "}).status_code == 422
+
+
+def test_album_description_draft_reports_generation_failure(client) -> None:
+    response = client.post("/api/album-description/draft", json={"artist_name": "Band", "album_title": "Album"})
+    assert response.status_code == 502
+    assert response.json()["detail"]
+
+
+@pytest.mark.parametrize("background", ["midnight-mist", "hollow-kingdom"])
+def test_background_selection_persists_and_asset_is_served(client, background) -> None:
+    response = client.put("/api/settings", json={
+        "writeup_model": "gpt-5.4-mini", "background": background,
+    })
+    assert response.status_code == 200
+    assert response.json()["background"] == background
+    assert client.get("/api/settings").json()["background"] == background
+    for route in ("/settings", "/albums", "/artists"):
+        page = client.get(route)
+        assert f'data-background="{background}"' in page.text
+    assert f'name="background" value="{background}" checked' in client.get("/settings").text
+    asset = client.get(f"/static/backgrounds/{background}.png")
+    assert asset.status_code == 200
+    assert asset.headers["content-type"] == "image/png"
+    assert asset.content.startswith(b"\x89PNG")
+    # Older API clients must not clear the chosen background.
+    client.put("/api/settings", json={"writeup_model": "gpt-5.4-mini"})
+    assert client.get("/api/settings").json()["background"] == background
+    invalid = client.put("/api/settings", json={
+        "writeup_model": "gpt-5.4-mini", "background": "../../outside",
+    })
+    assert invalid.status_code == 400
+    assert client.get("/api/settings").json()["background"] == background
+    cleared = client.put("/api/settings", json={
+        "writeup_model": "gpt-5.4-mini", "background": "none",
+    })
+    assert cleared.json()["background"] == "none"
+
+
+def test_import_bio_populates_researched_genre_and_origin_before_rendering_sources(client):
+    page = client.get("/imports").text
+    genre_update = 'if (result.genre) setValue("bundleAlbumGenre", result.genre);'
+    origin_update = 'if (result.origin) setValue("bundleArtistOrigin", result.origin);'
+    show_bio = 'showArtistDescriptionResult(document.getElementById("bundleArtistDescription"), confirmStatus, result);'
+    assert page.index(genre_update) < page.index(show_bio)
+    assert page.index(origin_update) < page.index(show_bio)
+    assert 'release_year: Number(value("bundleAlbumYear")) || null' in page
+
+
+def test_imports_page_prevents_stale_form_code_and_reports_filled_fields(client):
+    response = client.get("/imports")
+    assert response.headers["cache-control"] == "no-store"
+    assert "Fields filled — Genre:" in response.text
+    assert 'el.dispatchEvent(new Event("input", { bubbles: true }))' in response.text
+
+
+def test_import_bio_recovers_missing_album_year_and_duration(client):
+    page = client.get("/imports").text
+    assert 'const refreshed = await fetchJson("/api/import/album"' in page
+    assert 'if (!value("bundleAlbumYear") && albumMetadata.release_year)' in page
+    assert 'if (!value("bundleAlbumDuration") && albumMetadata.duration_seconds)' in page
+    assert '; Year: ' in page
+    assert '; Length: ' in page

@@ -31,3 +31,6 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["album_ranker*"]
+
+[tool.setuptools.package-data]
+album_ranker = ["static/backgrounds/*.png"]
